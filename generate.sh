@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=5,6 python run.py --config config/fashion.yaml --run_name MRAA_rdr_input --device_ids 5,6 --checkpoint 'log/baseline/00000099-checkpoint.pth.tar' --mode generate_video --log_dir '/disk1/tongkai/dataset/fashion/'

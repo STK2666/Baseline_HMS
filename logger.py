@@ -92,11 +92,11 @@ class Logger:
         self.epoch = epoch
         self.models = models
         self.log_scores(self.names)
-        # self.visualize_rec(inp, out)
         if self.epoch == 0:
             self.visualize_rec(inp, out)
         if (self.epoch + 1) % self.checkpoint_freq == 0:
             self.save_cpk()
+        if (self.epoch + 1) % 10 == 0:
             self.visualize_rec(inp, out)
 
 def draw_colored_heatmap(heatmap, colormap, bg_color):

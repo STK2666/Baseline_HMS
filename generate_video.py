@@ -71,7 +71,8 @@ def generate_video(config, inpainting_network, bg_predictor, dense_motion_networ
 
                 out = inpainting_network(source, source_region_params=source_region_params,
                            driving_region_params=driving_region_params, bg_params=bg_params,
-                           driving_smpl=driving_smpl, source_smpl=source_smpl)
+                           driving_smpl=driving_smpl, source_smpl=source_smpl, driving_pose=driving_rdr)
+                        #    driving_smpl=driving_smpl, source_smpl=source_smpl)
                 prediction = out['prediction'].data.cpu().numpy()
 
                 for frame in range(prediction.shape[0]):

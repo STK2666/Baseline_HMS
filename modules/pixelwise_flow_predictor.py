@@ -53,8 +53,7 @@ class PixelwiseFlowPredictor(nn.Module):
         else:
             self.occlusion = None
 
-        # self.combine_mask = nn.Conv2d(2+2+1, 1, kernel_size=(3, 3), padding=(1, 1))
-        # self.combine_mask = StyledConv(in_channels=2+2+1, out_channels=1, kernel_size=3, style_dim=85*2, upsample=False, demodulate=False)
+        self.combine_mask = nn.Conv2d(2+2+1, 1, kernel_size=(3, 3), padding=(1, 1))
         
         self.num_regions = num_regions
         self.scale_factor = scale_factor
@@ -208,26 +207,7 @@ class PixelwiseFlowPredictor(nn.Module):
         # deformation = (sparse_motion * mask).sum(dim=1)
         # deformation = deformation.permute(0, 2, 3, 1)
         
-        # cover
-        smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
-        smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
-        smpl_mask = smpl_mask.unsqueeze(1)
-        N,_,_,H,W = sparse_motion.shape
-        smpl_flow = F.interpolate(smpl_flow.view(N,2,smpl_flow.shape[-2],smpl_flow.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,2,H,W)
-        smpl_mask = F.interpolate(smpl_mask.view(N,1,smpl_mask.shape[-2],smpl_mask.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,H,W)
-
-        mask = F.softmax(mask, dim=1)
-        mask = mask.unsqueeze(2)
-        smpl_mask = smpl_mask.unsqueeze(2)
-
-        deformation = (sparse_motion * mask).sum(dim=1)
-        deformation_smpl = (smpl_flow * smpl_mask).sum(dim=1)
-        mask_index = (smpl_mask == 1.0).squeeze(1).repeat(1, 2, 1, 1)
-        # print(mask_index.shape, deformation.shape, deformation_smpl.shape)
-        deformation[mask_index] = deformation_smpl[mask_index]
-        deformation = deformation.permute(0, 2, 3, 1)
-        
-        # # conv cover
+        # # cover
         # smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
         # smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
         # smpl_mask = smpl_mask.unsqueeze(1)
@@ -241,10 +221,29 @@ class PixelwiseFlowPredictor(nn.Module):
 
         # deformation = (sparse_motion * mask).sum(dim=1)
         # deformation_smpl = (smpl_flow * smpl_mask).sum(dim=1)
-
-        # combine_mask = self.combine_mask(torch.cat([smpl_mask.squeeze(2), deformation, deformation_smpl], dim=1)).repeat(1, 2, 1, 1)
-        # deformation = deformation * (1 - combine_mask) + deformation_smpl * combine_mask
+        # mask_index = (smpl_mask == 1.0).squeeze(1).repeat(1, 2, 1, 1)
+        # # print(mask_index.shape, deformation.shape, deformation_smpl.shape)
+        # deformation[mask_index] = deformation_smpl[mask_index]
         # deformation = deformation.permute(0, 2, 3, 1)
+        
+        # conv cover
+        smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
+        smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
+        smpl_mask = smpl_mask.unsqueeze(1)
+        N,_,_,H,W = sparse_motion.shape
+        smpl_flow = F.interpolate(smpl_flow.view(N,2,smpl_flow.shape[-2],smpl_flow.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,2,H,W)
+        smpl_mask = F.interpolate(smpl_mask.view(N,1,smpl_mask.shape[-2],smpl_mask.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,H,W)
+
+        mask = F.softmax(mask, dim=1)
+        mask = mask.unsqueeze(2)
+        smpl_mask = smpl_mask.unsqueeze(2)
+
+        deformation = (sparse_motion * mask).sum(dim=1)
+        deformation_smpl = (smpl_flow * smpl_mask).sum(dim=1)
+
+        combine_mask = self.combine_mask(torch.cat([smpl_mask.squeeze(2), deformation, deformation_smpl], dim=1)).repeat(1, 2, 1, 1)
+        deformation = deformation * (1 - combine_mask) + deformation_smpl * combine_mask
+        deformation = deformation.permute(0, 2, 3, 1)
 
         out_dict['optical_flow'] = deformation
 

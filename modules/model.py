@@ -209,7 +209,7 @@ class GeneratorFullModel(torch.nn.Module):
 
         bg_params = self.bg_predictor(x['source'], x['source_rdr'], x['driving_rdr'])
         generated = self.generator(x['source'], source_region_params=source_region_params,
-                                   driving_region_params=driving_region_params, driving_smpl=x['driving_smpl'], source_smpl=x['source_smpl'], bg_params=bg_params)
+                                   driving_region_params=driving_region_params, driving_smpl=x['driving_smpl'], source_smpl=x['source_smpl'], bg_params=bg_params, driving_pose=x['driving_rdr'])
         generated.update({'source_region_params': source_region_params, 'driving_region_params': driving_region_params})
 
         loss_values = {}

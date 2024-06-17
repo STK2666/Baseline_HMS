@@ -7,6 +7,7 @@ title, fitness for a particular purpose, non-infringement, or that such code is 
 In no event will Snap Inc. be liable for any damages or losses of any kind arising from the sample code or your use thereof.
 """
 
+import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -40,11 +41,28 @@ class Generator(nn.Module):
             down_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
         self.down_blocks = nn.ModuleList(down_blocks)
 
+        pose_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
+        # wq_blocks = [SameBlock2d(block_expansion, block_expansion, kernel_size=(1, 1), padding=(0, 0))]
+        # wk_blocks = [SameBlock2d(block_expansion, block_expansion, kernel_size=(1, 1), padding=(0, 0))]
+        # wv_blocks = [SameBlock2d(block_expansion, block_expansion, kernel_size=(1, 1), padding=(0, 0))]
+        for i in range(num_down_blocks):
+            in_features = min(max_features, block_expansion * (2 ** i))
+            out_features = min(max_features, block_expansion * (2 ** (i + 1)))
+            pose_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+        #     wq_blocks.append(SameBlock2d(out_features, out_features, kernel_size=(1, 1), padding=(0, 0)))
+        #     wk_blocks.append(SameBlock2d(out_features, out_features, kernel_size=(1, 1), padding=(0, 0)))
+        #     wv_blocks.append(SameBlock2d(out_features, out_features, kernel_size=(1, 1), padding=(0, 0)))
+        self.pose_blocks = nn.ModuleList(pose_blocks)
+        # self.wq_blocks = nn.ModuleList(wq_blocks[::-1])
+        # self.wk_blocks = nn.ModuleList(wk_blocks[::-1])
+        # self.wv_blocks = nn.ModuleList(wv_blocks[::-1])
+
         up_blocks = []
         for i in range(num_down_blocks):
             in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
             out_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i - 1)))
             up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+            # up_blocks.append(UpBlock2d(2*in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
         self.up_blocks = nn.ModuleList(up_blocks)
 
         self.bottleneck = torch.nn.Sequential()
@@ -53,6 +71,7 @@ class Generator(nn.Module):
             self.bottleneck.add_module('r' + str(i), ResBlock2d(in_features, kernel_size=(3, 3), padding=(1, 1)))
 
         self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
+        # self.final = nn.Conv2d(2*block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
         self.num_channels = num_channels
         self.skips = skips
 
@@ -87,12 +106,26 @@ class Generator(nn.Module):
             out = input_previous if input_previous is not None else input_skip
         return out
 
-    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None):
+    def dot_product_attention(self, query, key, value):
+        d_k = query.size(-1)
+        scores = torch.matmul(query, key.transpose(-2, -1)) / np.sqrt(d_k)
+        p_attn = F.softmax(scores, dim = -1)
+        return torch.matmul(p_attn, value)
+
+    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, driving_pose=None):
         out = self.first(source_image)
         skips = [out]
         for i in range(len(self.down_blocks)):
             out = self.down_blocks[i](out)
             skips.append(out)
+
+        if driving_pose is not None:
+            pose = driving_pose
+            poses = []
+            for i in range(len(self.pose_blocks)):
+                pose = self.pose_blocks[i](pose)
+                poses.append(pose)
+            poses = poses[::-1]
 
         output_dict = {}
         output_dict["bottle_neck_feat"] = out
@@ -115,9 +148,23 @@ class Generator(nn.Module):
         for i in range(len(self.up_blocks)):
             if self.skips:
                 out = self.apply_optical(input_skip=skips[-(i + 1)], input_previous=out, motion_params=motion_params)
+            if driving_pose is not None:
+                # pose = self.dot_product_attention(self.wq_blocks[i](out), self.wk_blocks[i](poses[i]), self.wv_blocks[i](poses[i]))
+                # out = torch.concat([out, pose], dim=1)
+                # out = out + self.dot_product_attention(self.wq_blocks[i](out), self.wk_blocks[i](poses[i]), self.wv_blocks[i](poses[i]))
+                # out = out + self.dot_product_attention(self.wq_blocks[i](poses[i]), self.wk_blocks[i](out), self.wv_blocks[i](out))
+                out = out + self.dot_product_attention(poses[i], out, out)
+                # out = out + poses[i]
             out = self.up_blocks[i](out)
         if self.skips:
             out = self.apply_optical(input_skip=skips[0], input_previous=out, motion_params=motion_params)
+        if driving_pose is not None:
+            # pose = self.dot_product_attention(self.wq_blocks[-1](out), self.wk_blocks[-1](poses[-1]), self.wv_blocks[-1](poses[-1]))
+            # out = torch.concat([out, pose], dim=1)
+            # out = out + self.dot_product_attention(self.wq_blocks[-1](out), self.wk_blocks[-1](poses[-1]), self.wv_blocks[-1](poses[-1]))
+            # out = out + self.dot_product_attention(self.wq_blocks[-1](poses[-1]), self.wk_blocks[-1](out), self.wv_blocks[-1](out))
+            out = out + self.dot_product_attention(poses[-1], out, out)
+            # out = out + poses[-1]
         out = self.final(out)
         out = torch.sigmoid(out)
 

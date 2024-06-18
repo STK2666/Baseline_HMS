@@ -1,10 +1,12 @@
+from click import style
 from torch import nn
 
 import torch.nn.functional as F
 import torch
 from op import FusedLeakyReLU, fused_leaky_relu, upfirdn2d, conv2d_gradfix
-
+# from modules.util import kpt2heatmap
 import math
+
 
 def make_kernel(k):
     k = torch.tensor(k, dtype=torch.float32)
@@ -239,6 +241,223 @@ class StyledConv(nn.Module):
     def forward(self, input, style, noise=None):
         out = self.conv(input, style)
         # out = self.noise(out, noise=noise)
+        out = out + self.bias
+        out = self.activate(out)
+
+        return out
+
+
+class SMPLConv2d(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        smpl_dim=85*2,
+        demodulate=True,
+    ):
+        super().__init__()
+
+        self.kernel_size = kernel_size
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        fan_in = in_channels * kernel_size ** 2
+        self.scale = 1 / math.sqrt(fan_in)
+        self.padding = kernel_size // 2
+
+        self.gamma = nn.Linear(smpl_dim, in_channels)
+        self.beta = nn.Linear(smpl_dim, in_channels)
+
+        self.weight = nn.Parameter(
+            torch.randn(1, out_channels, in_channels, kernel_size, kernel_size)
+        )
+
+        self.modulation_fc = EqualLinear(smpl_dim, in_channels, bias_init=1)
+        # self.modulation_fc1 = EqualLinear(smpl_dim, in_channels, bias_init=1)
+        # self.modulation_norm1 = nn.InstanceNorm1d(smpl_dim)
+        # self.modulation_norm2 = nn.InstanceNorm1d(in_channels)
+        # self.modulation_fc2= EqualLinear(in_channels, in_channels, bias_init=1)
+        # self.modulation_relu = nn.ReLU()
+
+        self.demodulate = demodulate
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}({self.in_channels}, {self.out_channels}, {self.kernel_size})"
+        )
+
+    def forward(self, input, smpl):
+        gamma = self.gamma(smpl).view(smpl.shape[0], -1, 1, 1)
+        beta = self.beta(smpl).view(smpl.shape[0], -1, 1, 1)
+        input = input * (gamma) + beta
+
+        batch, in_channels, height, width = input.shape
+        # smpl = F.relu(smpl)
+        # smpl = self.modulation_fc1(smpl)
+        # smpl = self.modulation_norm1(smpl)
+        # smpl = self.modulation_norm2(smpl)
+        # smpl = self.modulation_fc2(smpl)
+        # smpl = F.relu(smpl)
+        smpl = self.modulation_fc(smpl)
+        smpl = smpl.view(batch, 1, in_channels, 1, 1)
+        weight = self.scale * self.weight * smpl
+
+        if self.demodulate:
+            demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-8)
+            weight = weight * demod.view(batch, self.out_channels, 1, 1, 1)
+
+        weight = weight.view(
+            batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size
+        )
+
+        input = input.view(1, batch * in_channels, height, width)
+        out = conv2d_gradfix.conv2d(
+            input, weight, padding=self.padding, groups=batch
+        )
+        _, _, height, width = out.shape
+        out = out.view(batch, self.out_channels, height, width)
+
+        return out
+
+
+class SMPLConv(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        smpl_dim,
+        demodulate=True,
+    ):
+        super().__init__()
+
+        self.conv = SMPLConv2d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            smpl_dim,
+            demodulate=demodulate,
+        )
+
+        # self.noise = NoiseInjection()
+        self.bias = nn.Parameter(torch.zeros(1, out_channels, 1, 1))
+        self.activate = FusedLeakyReLU(out_channels)
+
+    def forward(self, input, smpl_params):
+        out = self.conv(input, smpl_params)
+
+        out = out + self.bias
+        out = self.activate(out)
+
+        return out
+
+
+class SMPLStyledConv2d(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        style_dim,
+        smpl_dim=85*2,
+        demodulate=True,
+    ):
+        super().__init__()
+
+        self.kernel_size = kernel_size
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        fan_in = in_channels * kernel_size ** 2
+        self.scale = 1 / math.sqrt(fan_in)
+        self.padding = kernel_size // 2
+
+        self.gamma = nn.Linear(smpl_dim, in_channels)
+        self.beta = nn.Linear(smpl_dim, in_channels)
+
+        self.weight = nn.Parameter(
+            torch.randn(1, out_channels, in_channels, kernel_size, kernel_size)
+        )
+
+        self.modulation_fc = EqualLinear(style_dim, in_channels, bias_init=1)
+        # self.modulation_norm1 = nn.InstanceNorm1d(smpl_dim)
+        # self.modulation_fc1 = EqualLinear(smpl_dim, in_channels, bias_init=1)
+        # self.modulation_norm2 = nn.InstanceNorm1d(in_channels)
+        # self.modulation_relu = nn.ReLU()
+        # self.modulation_fc2= EqualLinear(in_channels, in_channels, bias_init=1)
+
+        self.demodulate = demodulate
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}({self.in_channels}, {self.out_channels}, {self.kernel_size})"
+        )
+
+    def forward(self, input, smpl, style):
+        gamma = self.gamma(smpl).view(smpl.shape[0], -1, 1, 1)
+        beta = self.beta(smpl).view(smpl.shape[0], -1, 1, 1)
+        input = input * (gamma) + beta
+
+        batch, in_channels, height, width = input.shape
+        # smpl = self.modulation_norm1(smpl)
+        # smpl = F.relu(smpl)
+        # smpl = self.modulation_fc1(smpl)
+        # smpl = self.modulation_norm2(smpl)
+        # smpl = F.relu(smpl)
+        # smpl = self.modulation_fc2(smpl)
+        # smpl = self.modulation_fc(smpl)
+        # smpl = smpl.view(batch, 1, in_channels, 1, 1)
+        style = self.modulation_fc(style)
+        style = style.view(batch, 1, in_channels, 1, 1)
+        weight = self.scale * self.weight * style
+
+        if self.demodulate:
+            demod = torch.rsqrt(weight.pow(2).sum([2, 3, 4]) + 1e-8)
+            weight = weight * demod.view(batch, self.out_channels, 1, 1, 1)
+
+        weight = weight.view(
+            batch * self.out_channels, in_channels, self.kernel_size, self.kernel_size
+        )
+
+        input = input.view(1, batch * in_channels, height, width)
+        out = conv2d_gradfix.conv2d(
+            input, weight, padding=self.padding, groups=batch
+        )
+        _, _, height, width = out.shape
+        out = out.view(batch, self.out_channels, height, width)
+
+        return out
+
+
+class SMPLStyledConv(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        style_dim,
+        smpl_dim,
+        demodulate=True,
+    ):
+        super().__init__()
+
+        self.conv = SMPLStyledConv2d(
+            in_channels,
+            out_channels,
+            kernel_size,
+            style_dim,
+            smpl_dim,
+            demodulate=demodulate,
+        )
+
+        # self.noise = NoiseInjection()
+        self.bias = nn.Parameter(torch.zeros(1, out_channels, 1, 1))
+        self.activate = FusedLeakyReLU(out_channels)
+
+    def forward(self, input, smpl_params, style):
+        out = self.conv(input, smpl_params, style)
+
         out = out + self.bias
         out = self.activate(out)
 

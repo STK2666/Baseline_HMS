@@ -56,7 +56,7 @@ train_params:
   batch_size: 16
   scales: [1, 0.5, 0.25, 0.125]
   dataloader_workers: 10
-  checkpoint_freq: 10
+  checkpoint_freq: 50
   bg_start: 0
   transform_params:
     sigma_affine: 0.05

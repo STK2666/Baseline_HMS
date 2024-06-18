@@ -6,16 +6,14 @@ Such code is provided as-is, without warranty of any kind, express or implied, i
 title, fitness for a particular purpose, non-infringement, or that such code is free of defects, errors or viruses.
 In no event will Snap Inc. be liable for any damages or losses of any kind arising from the sample code or your use thereof.
 """
-
-from turtle import forward
-from click import style
+from curses import KEY_UP
 from torch import nn
 
 import torch.nn.functional as F
 import torch
 from sync_batchnorm import SynchronizedBatchNorm2d as BatchNorm2d
 # from op import FusedLeakyReLU, fused_leaky_relu, upfirdn2d, conv2d_gradfix
-from modules.new_conv import StyledConv
+from modules.new_conv import SMPLStyledConv2d
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -76,6 +74,23 @@ def make_coordinate_grid(spatial_size, type):
     meshed = torch.cat([xx.unsqueeze_(2), yy.unsqueeze_(2)], 2)
 
     return meshed
+
+
+def kpt2heatmap(keypoints, spatial_size=(256, 256), sigma=1.0):
+    keypoints_ = keypoints.clone().cpu()
+    batch_size, num_keypoints, _ = keypoints_.size()
+    height, width = spatial_size
+    heatmaps = torch.zeros(batch_size, num_keypoints, height, width)
+    for b in range(batch_size):
+        for k in range(num_keypoints):
+            x, y = keypoints_[b, k, 0], keypoints_[b, k, 1]
+            if x >= 0 and x < width and y >= 0 and y < height:
+                heatmap = torch.zeros(height, width)
+                heatmap = heatmap + torch.exp(-(((torch.arange(height).float() - y) ** 2) / (2 * sigma**2))[:, None])
+                heatmap = heatmap * torch.exp(-(((torch.arange(width).float() - x) ** 2) / (2 * sigma**2))[None, :])
+                heatmaps[b, k] = heatmap
+    heatmaps = heatmaps.to(keypoints.device)
+    return heatmaps
 
 
 class ResBlock2d(nn.Module):
@@ -143,108 +158,6 @@ class DownBlock2d(nn.Module):
         return out
 
 
-class UpBlock2d_StyledConv(nn.Module):
-    """
-    Upsampling block for use in decoder.
-    """
-
-    def __init__(self, in_features, out_features, style_dim, kernel_size=3, padding=1, groups=1):
-        super(UpBlock2d_StyledConv, self).__init__()
-
-        # self.conv = nn.Conv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
-        #                       padding=padding, groups=groups)
-        self.conv = StyledConv(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size, style_dim=style_dim, upsample=False, demodulate=False)
-        self.norm = BatchNorm2d(out_features, affine=True)
-
-    def forward(self, x, style):
-        out = F.interpolate(x, scale_factor=2)
-        out = self.conv(out, style)
-        out = self.norm(out)
-        out = F.relu(out)
-        return out
-
-
-class DownBlock2d_StyledConv(nn.Module):
-    """
-    Downsampling block for use in encoder.
-    """
-
-    def __init__(self, in_features, out_features, style_dim, kernel_size=3, padding=1, groups=1):
-        super(DownBlock2d_StyledConv, self).__init__()
-        # self.conv = nn.Conv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
-        #                       padding=padding, groups=groups)
-        self.conv = StyledConv(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size, style_dim=style_dim, upsample=False, demodulate=False)
-        self.norm = BatchNorm2d(out_features, affine=True)
-        self.pool = nn.AvgPool2d(kernel_size=(2, 2))
-
-    def forward(self, x, style):
-        out = self.conv(x, style)
-        out = self.norm(out)
-        out = F.relu(out)
-        out = self.pool(out)
-        return out
-
-
-class FiLM(nn.Module):
-    def __init__(self, in_features, style_dim):
-        super(FiLM, self).__init__()
-        self.gamma = nn.Linear(style_dim, in_features)
-        self.beta = nn.Linear(style_dim, in_features)
-    
-    def forward(self, x, style):
-        gamma = self.gamma(style).view(style.shape[0], -1, 1, 1)
-        beta = self.beta(style).view(style.shape[0], -1, 1, 1)
-        out = x * (gamma) + beta
-        return out
-
-
-class UpBlock2d_FiLM(nn.Module):
-    """
-    Upsampling block for use in decoder.
-    """
-
-    def __init__(self, in_features, out_features, style_dim, kernel_size=3, padding=1, groups=1):
-        super(UpBlock2d_FiLM, self).__init__()
-
-        self.conv = nn.Conv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
-                              padding=padding, groups=groups)
-        self.film = FiLM(out_features, style_dim)
-        # self.conv = StyledConv(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size, style_dim=style_dim, upsample=False, demodulate=False)
-        # self.norm = BatchNorm2d(out_features, affine=True)
-
-    def forward(self, x, style):
-        out = F.interpolate(x, scale_factor=2)
-        # out = self.film(style).view(style.shape[0], -1, 1, 1) * out
-        out = self.conv(out)
-        out = self.film(out, style)
-        # out = self.norm(out)
-        out = F.relu(out)
-        return out
-
-
-class DownBlock2d_FiLM(nn.Module):
-    """
-    Downsampling block for use in encoder.
-    """
-
-    def __init__(self, in_features, out_features, style_dim, kernel_size=3, padding=1, groups=1):
-        super(DownBlock2d_FiLM, self).__init__()
-        self.conv = nn.Conv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
-                              padding=padding, groups=groups)
-        self.film = FiLM(out_features, style_dim)
-        # self.conv = StyledConv(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size, style_dim=style_dim, upsample=False, demodulate=False)
-        # self.norm = BatchNorm2d(out_features, affine=True)
-        self.pool = nn.AvgPool2d(kernel_size=(2, 2))
-
-    def forward(self, x, style):
-        out = self.conv(x)
-        out = self.film(out, style)
-        # out = self.norm(out)
-        out = F.relu(out)
-        out = self.pool(out)
-        return out
-
-
 class SameBlock2d(nn.Module):
     """
     Simple block, preserve spatial resolution.
@@ -258,6 +171,70 @@ class SameBlock2d(nn.Module):
 
     def forward(self, x):
         out = self.conv(x)
+        out = self.norm(out)
+        out = F.relu(out)
+        return out
+
+
+class SMPLStyledResBlock2d(nn.Module):
+    """
+    Res block, preserve spatial resolution.
+    """
+
+    def __init__(self, in_features, style_dim, kernel_size=3):
+        super(SMPLStyledResBlock2d, self).__init__()
+        self.conv1 = SMPLStyledConv2d(in_channels=in_features, out_channels=in_features, kernel_size=kernel_size,
+                              style_dim=style_dim)
+        self.conv2 = SMPLStyledConv2d(in_channels=in_features, out_channels=in_features, kernel_size=kernel_size,
+                              style_dim=style_dim)
+        self.norm1 = BatchNorm2d(in_features, affine=True)
+        self.norm2 = BatchNorm2d(in_features, affine=True)
+
+    def forward(self, x, smpl, style):
+        out = self.norm1(x)
+        out = F.relu(out)
+        out = self.conv1(out, smpl, style)
+        out = self.norm2(out)
+        out = F.relu(out)
+        out = self.conv2(out, smpl, style)
+        out += x
+        return out
+
+
+
+class SMPLStyledUpBlock2d(nn.Module):
+    """
+    Upsampling block for use in decoder.
+    """
+
+    def __init__(self, in_features, out_features, style_dim, kernel_size=3):
+        super(SMPLStyledUpBlock2d, self).__init__()
+
+        self.conv = SMPLStyledConv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
+                              style_dim=style_dim)
+        self.norm = BatchNorm2d(out_features, affine=True)
+
+    def forward(self, x, smpl, style):
+        out = F.interpolate(x, scale_factor=2)
+        out = self.conv(out, smpl, style)
+        out = self.norm(out)
+        out = F.relu(out)
+        return out
+
+
+class SMPLStyledSameBlock2d(nn.Module):
+    """
+    Simple block, preserve spatial resolution.
+    """
+
+    def __init__(self, in_features, out_features, style_dim, kernel_size=3):
+        super(SMPLStyledSameBlock2d, self).__init__()
+        self.conv = SMPLStyledConv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
+                              style_dim=style_dim)
+        self.norm = BatchNorm2d(out_features, affine=True)
+
+    def forward(self, x, smpl, style):
+        out = self.conv(x, smpl, style)
         out = self.norm(out)
         out = F.relu(out)
         return out
@@ -312,48 +289,6 @@ class Decoder(nn.Module):
         return out
 
 
-class Encoder_StyledConv(nn.Module):
-    def __init__(self, block_expansion, in_features, style_dim, num_blocks=3, max_features=256):
-        super(Encoder_StyledConv, self).__init__()
-
-        down_blocks = []
-        for i in range(num_blocks):
-            down_blocks.append(DownBlock2d_FiLM(in_features if i == 0 else min(max_features, block_expansion * (2 ** i)),
-                                           min(max_features, block_expansion * (2 ** (i + 1))), style_dim=style_dim,
-                                           kernel_size=3, padding=1))
-            
-        self.down_blocks = nn.ModuleList(down_blocks)
-
-    def forward(self, x, style):
-        outs = [x]
-        for down_block in self.down_blocks:
-            outs.append(down_block(outs[-1], style))
-        return outs
-
-
-class Decoder_StyledConv(nn.Module):
-    def __init__(self, block_expansion, in_features, style_dim, num_blocks=3, max_features=256):
-        super(Decoder_StyledConv, self).__init__()
-
-        up_blocks = []
-
-        for i in range(num_blocks)[::-1]:
-            in_filters = (1 if i == num_blocks - 1 else 2) * min(max_features, block_expansion * (2 ** (i + 1)))
-            out_filters = min(max_features, block_expansion * (2 ** i))
-            up_blocks.append(UpBlock2d_FiLM(in_filters, out_filters, style_dim=style_dim, kernel_size=3, padding=1))
-
-        self.up_blocks = nn.ModuleList(up_blocks)
-        self.out_filters = block_expansion + in_features
-
-    def forward(self, x, style):
-        out = x.pop()
-        for up_block in self.up_blocks:
-            out = up_block(out, style)
-            skip = x.pop()
-            out = torch.cat([out, skip], dim=1)
-        return out
-
-
 class Hourglass(nn.Module):
     """
     Hourglass architecture.
@@ -367,21 +302,6 @@ class Hourglass(nn.Module):
 
     def forward(self, x):
         return self.decoder(self.encoder(x))
-
-
-class Hourglass_StyledConv(nn.Module):
-    """
-    Hourglass architecture.
-    """
-
-    def __init__(self, block_expansion, in_features, style_dim, num_blocks=3, max_features=256):
-        super(Hourglass_StyledConv, self).__init__()
-        self.encoder = Encoder_StyledConv(block_expansion, in_features, style_dim, num_blocks, max_features)
-        self.decoder = Decoder_StyledConv(block_expansion, in_features, style_dim, num_blocks, max_features)
-        self.out_filters = self.decoder.out_filters
-
-    def forward(self, x, style):
-        return self.decoder(self.encoder(x, style), style)
 
 
 class AntiAliasInterpolation2d(nn.Module):

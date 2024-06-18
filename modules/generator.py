@@ -11,6 +11,8 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d
+from modules.util import SMPLStyledResBlock2d, SMPLStyledUpBlock2d
+from modules.new_conv import SMPLStyledConv2d
 from modules.pixelwise_flow_predictor import PixelwiseFlowPredictor
 
 
@@ -33,6 +35,13 @@ class Generator(nn.Module):
 
         self.first = SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))
 
+        # style_encoder_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
+        # for i in range(num_down_blocks+3):
+        #     in_features = min(max_features, block_expansion * (2 ** i))
+        #     out_features = min(max_features, block_expansion * (2 ** (i + 1)))
+        #     style_encoder_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+        # self.style_encoder = nn.ModuleList(style_encoder_blocks)
+
         down_blocks = []
         for i in range(num_down_blocks):
             in_features = min(max_features, block_expansion * (2 ** i))
@@ -44,15 +53,19 @@ class Generator(nn.Module):
         for i in range(num_down_blocks):
             in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
             out_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i - 1)))
+            # up_blocks.append(SMPLStyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
             up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
         self.up_blocks = nn.ModuleList(up_blocks)
 
         self.bottleneck = torch.nn.Sequential()
+        # bottle_blocks = []
         in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
         for i in range(num_bottleneck_blocks):
             self.bottleneck.add_module('r' + str(i), ResBlock2d(in_features, kernel_size=(3, 3), padding=(1, 1)))
-
+            # bottle_blocks.append(SMPLStyledResBlock2d(in_features, kernel_size=3, style_dim=max_features))
+        # self.bottleneck = nn.ModuleList(bottle_blocks)
         self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
+        # self.final = SMPLStyledConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
         self.num_channels = num_channels
         self.skips = skips
 
@@ -87,7 +100,16 @@ class Generator(nn.Module):
             out = input_previous if input_previous is not None else input_skip
         return out
 
-    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None):
+    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, style=None):
+        # style = self.style_encoder[0](source_image)
+        # for i in range(len(self.style_encoder)-1):
+        #     style = self.style_encoder[i+1](style)
+        # style = F.adaptive_avg_pool2d(style, (1, 1)).view(style.shape[0], -1)
+
+        # source_smpl = source_smpl.squeeze(-1)
+        # driving_smpl = driving_smpl.squeeze(-1)
+        # smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
+
         out = self.first(source_image)
         skips = [out]
         for i in range(len(self.down_blocks)):
@@ -104,6 +126,8 @@ class Generator(nn.Module):
                                                           bg_params=bg_params)
             output_dict["deformed"] = self.deform_input(source_image, motion_params['optical_flow'])
             output_dict["optical_flow"] = motion_params['optical_flow']
+            output_dict['combine_mask'] = motion_params['combine_mask']
+            output_dict['smpl_mask'] = motion_params['smpl_mask']
             if 'occlusion_map' in motion_params:
                 output_dict['occlusion_map'] = motion_params['occlusion_map']
         else:
@@ -112,12 +136,18 @@ class Generator(nn.Module):
         out = self.apply_optical(input_previous=None, input_skip=out, motion_params=motion_params)
 
         out = self.bottleneck(out)
+        
+        # for i in range(len(self.bottleneck)):
+            # out = self.bottleneck[i](out, smpl, style)
+
         for i in range(len(self.up_blocks)):
             if self.skips:
                 out = self.apply_optical(input_skip=skips[-(i + 1)], input_previous=out, motion_params=motion_params)
+            # out = self.up_blocks[i](out, smpl, style)
             out = self.up_blocks[i](out)
         if self.skips:
             out = self.apply_optical(input_skip=skips[0], input_previous=out, motion_params=motion_params)
+        # out = self.final(out, smpl, style)
         out = self.final(out)
         out = torch.sigmoid(out)
 

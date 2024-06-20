@@ -11,8 +11,9 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d
-from modules.util import SMPLStyledResBlock2d, SMPLStyledUpBlock2d
-from modules.new_conv import SMPLStyledConv2d
+from modules.util import SMPLStyledResBlock2d, SMPLStyledUpBlock2d, SMPLStyledSameBlock2d
+from modules.util import StyledResBlock2d, StyledUpBlock2d, StyledSameBlock2d
+from modules.new_conv import SMPLStyledConv2d, ModulatedConv2d
 from modules.pixelwise_flow_predictor import PixelwiseFlowPredictor
 
 
@@ -35,12 +36,12 @@ class Generator(nn.Module):
 
         self.first = SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))
 
-        # style_encoder_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
-        # for i in range(num_down_blocks+3):
-        #     in_features = min(max_features, block_expansion * (2 ** i))
-        #     out_features = min(max_features, block_expansion * (2 ** (i + 1)))
-        #     style_encoder_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
-        # self.style_encoder = nn.ModuleList(style_encoder_blocks)
+        style_encoder_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
+        for i in range(num_down_blocks+3):
+            in_features = min(max_features, block_expansion * (2 ** i))
+            out_features = min(max_features, block_expansion * (2 ** (i + 1)))
+            style_encoder_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+        self.style_encoder = nn.ModuleList(style_encoder_blocks)
 
         down_blocks = []
         for i in range(num_down_blocks):
@@ -53,19 +54,31 @@ class Generator(nn.Module):
         for i in range(num_down_blocks):
             in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
             out_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i - 1)))
-            # up_blocks.append(SMPLStyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
-            up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+            up_blocks.append(SMPLStyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
+            up_blocks.append(SMPLStyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
+            # up_blocks.append(StyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
+            # up_blocks.append(StyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
+            # up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
         self.up_blocks = nn.ModuleList(up_blocks)
 
-        self.bottleneck = torch.nn.Sequential()
+        # res_blocks = []
+        # for i in range(num_down_blocks):
+        #     in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
+        #     res_blocks.append(StyledResBlock2d(in_features, kernel_size=3, style_dim=max_features))
+        #     res_blocks.append(StyledResBlock2d(in_features, kernel_size=3, style_dim=max_features))
+        # self.res_blocks = nn.ModuleList(res_blocks)
+
         # bottle_blocks = []
+        self.bottleneck = torch.nn.Sequential()
         in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
         for i in range(num_bottleneck_blocks):
             self.bottleneck.add_module('r' + str(i), ResBlock2d(in_features, kernel_size=(3, 3), padding=(1, 1)))
+            # bottle_blocks.append(StyledResBlock2d(in_features, kernel_size=3, style_dim=max_features))
             # bottle_blocks.append(SMPLStyledResBlock2d(in_features, kernel_size=3, style_dim=max_features))
         # self.bottleneck = nn.ModuleList(bottle_blocks)
-        self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
-        # self.final = SMPLStyledConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
+        # self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
+        # self.final = ModulatedConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
+        self.final = SMPLStyledConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
         self.num_channels = num_channels
         self.skips = skips
 
@@ -100,15 +113,15 @@ class Generator(nn.Module):
             out = input_previous if input_previous is not None else input_skip
         return out
 
-    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, style=None):
-        # style = self.style_encoder[0](source_image)
-        # for i in range(len(self.style_encoder)-1):
-        #     style = self.style_encoder[i+1](style)
-        # style = F.adaptive_avg_pool2d(style, (1, 1)).view(style.shape[0], -1)
+    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None):
+        style = self.style_encoder[0](source_image)
+        for i in range(len(self.style_encoder)-1):
+            style = self.style_encoder[i+1](style)
+        style = F.adaptive_avg_pool2d(style, (1, 1)).view(style.shape[0], -1)
 
-        # source_smpl = source_smpl.squeeze(-1)
-        # driving_smpl = driving_smpl.squeeze(-1)
-        # smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
+        source_smpl = source_smpl.squeeze(-1)
+        driving_smpl = driving_smpl.squeeze(-1)
+        smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
 
         out = self.first(source_image)
         skips = [out]
@@ -138,17 +151,27 @@ class Generator(nn.Module):
         out = self.bottleneck(out)
         
         # for i in range(len(self.bottleneck)):
+            # out = self.bottleneck[i](out, style)
             # out = self.bottleneck[i](out, smpl, style)
 
-        for i in range(len(self.up_blocks)):
+        # for i in range(len(self.up_blocks)):
+        for i in range(len(self.down_blocks)):
             if self.skips:
                 out = self.apply_optical(input_skip=skips[-(i + 1)], input_previous=out, motion_params=motion_params)
+            # out = self.up_blocks[i](out)
+            # out = self.res_blocks[i*2](out, style)
+            # out = self.res_blocks[i*2+1](out, style)
+            # out = self.up_blocks[i](out, style)
+            # out = self.up_blocks[i*2](out, style)
+            # out = self.up_blocks[i*2+1](out, style)
             # out = self.up_blocks[i](out, smpl, style)
-            out = self.up_blocks[i](out)
+            out = self.up_blocks[i*2](out, smpl, style)
+            out = self.up_blocks[i*2+1](out, smpl, style)
         if self.skips:
             out = self.apply_optical(input_skip=skips[0], input_previous=out, motion_params=motion_params)
-        # out = self.final(out, smpl, style)
-        out = self.final(out)
+        # out = self.final(out)
+        # out = self.final(out, style)
+        out = self.final(out, smpl, style)
         out = torch.sigmoid(out)
 
         if self.skips:

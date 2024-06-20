@@ -6,14 +6,13 @@ Such code is provided as-is, without warranty of any kind, express or implied, i
 title, fitness for a particular purpose, non-infringement, or that such code is free of defects, errors or viruses.
 In no event will Snap Inc. be liable for any damages or losses of any kind arising from the sample code or your use thereof.
 """
-from curses import KEY_UP
 from torch import nn
 
 import torch.nn.functional as F
 import torch
 from sync_batchnorm import SynchronizedBatchNorm2d as BatchNorm2d
 # from op import FusedLeakyReLU, fused_leaky_relu, upfirdn2d, conv2d_gradfix
-from modules.new_conv import SMPLStyledConv2d
+from modules.new_conv import SMPLStyledConv2d, ModulatedConv2d
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -201,7 +200,6 @@ class SMPLStyledResBlock2d(nn.Module):
         return out
 
 
-
 class SMPLStyledUpBlock2d(nn.Module):
     """
     Upsampling block for use in decoder.
@@ -238,6 +236,70 @@ class SMPLStyledSameBlock2d(nn.Module):
         out = self.norm(out)
         out = F.relu(out)
         return out
+
+
+class StyledResBlock2d(nn.Module):
+    """
+    Res block, preserve spatial resolution.
+    """
+
+    def __init__(self, in_features, style_dim, kernel_size=3):
+        super(StyledResBlock2d, self).__init__()
+        self.conv1 = ModulatedConv2d(in_channels=in_features, out_channels=in_features, kernel_size=kernel_size,
+                              style_dim=style_dim)
+        self.conv2 = ModulatedConv2d(in_channels=in_features, out_channels=in_features, kernel_size=kernel_size,
+                              style_dim=style_dim)
+        self.norm1 = BatchNorm2d(in_features, affine=True)
+        self.norm2 = BatchNorm2d(in_features, affine=True)
+
+    def forward(self, x, style):
+        out = self.norm1(x)
+        # out = F.relu(out)
+        out = self.conv1(out, style)
+        out = self.norm2(out)
+        # out = F.relu(out)
+        out = self.conv2(out, style)
+        out += x
+        return out
+
+
+class StyledUpBlock2d(nn.Module):
+    """
+    Upsampling block for use in decoder.
+    """
+
+    def __init__(self, in_features, out_features, style_dim, kernel_size=3):
+        super(StyledUpBlock2d, self).__init__()
+
+        self.conv = ModulatedConv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
+                              style_dim=style_dim)
+        self.norm = BatchNorm2d(out_features, affine=True)
+
+    def forward(self, x, style):
+        out = F.interpolate(x, scale_factor=2)
+        out = self.conv(out, style)
+        out = self.norm(out)
+        # out = F.relu(out)
+        return out
+
+
+class StyledSameBlock2d(nn.Module):
+    """
+    Simple block, preserve spatial resolution.
+    """
+
+    def __init__(self, in_features, out_features, style_dim, kernel_size=3):
+        super(StyledSameBlock2d, self).__init__()
+        self.conv = ModulatedConv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size,
+                              style_dim=style_dim)
+        self.norm = BatchNorm2d(out_features, affine=True)
+
+    def forward(self, x, style):
+        out = self.conv(x, style)
+        out = self.norm(out)
+        out = F.relu(out)
+        return out
+
 
 
 class Encoder(nn.Module):

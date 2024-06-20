@@ -1,0 +1,80 @@
+dataset_params:
+  root_dir: /disk1/dataset/FashionVideo
+  frame_shape: null
+  id_sampling: False
+  augmentation_params:
+    # flip_param:
+    #   horizontal_flip: True
+    #   time_flip: True
+    jitter_param:
+      brightness: 0.1
+      contrast: 0.1
+      saturation: 0.1
+      hue: 0.1
+
+model_params:
+  common_params:
+    num_regions: 20
+    num_channels: 3
+    estimate_affine: True
+    revert_axis_swap: True
+    bg: True
+  generator_params:
+    block_expansion: 64
+    max_features: 256
+    # max_features: 512
+    num_down_blocks: 3
+    num_bottleneck_blocks: 2
+    skips: True
+    pixelwise_flow_predictor_params:
+      block_expansion: 64
+      max_features: 1024
+      num_blocks: 5
+      scale_factor: 0.25
+      use_deformed_source: True
+      use_covar_heatmap: True
+      estimate_occlusion_map: True
+  bg_predictor_params:
+    block_expansion: 32
+    max_features: 1024
+    num_blocks: 5
+    bg_type: 'affine'
+  region_predictor_params:
+    temperature: 0.1
+    block_expansion: 32
+    max_features: 1024
+    scale_factor: 0.25
+    num_blocks: 5
+    pca_based: True
+    pad: 0
+    fast_svd: False
+
+train_params:
+  num_epochs: 100
+  num_repeats: 30
+  epoch_milestones: [70, 90]
+  lr_generator: 2.0e-4
+  batch_size: 16
+  # scales: [1]
+  scales: [1, 0.5, 0.25, 0.125]
+  dataloader_workers: 10
+  checkpoint_freq: 20
+  bg_start: 0
+  transform_params:
+    sigma_affine: 0.05
+    sigma_tps: 0.005
+    points_tps: 5
+  loss_weights:
+    perceptual: [10, 10, 10, 10, 10]
+    # perceptual: [40, 40, 40, 40, 40]
+    # style: [0, 0, 0, 0, 0]
+    style: [10, 10, 10, 10, 10]
+    # l1: 0
+    l1: 50
+    equivariance_shift: 0
+    equivariance_affine: 0
+
+visualizer_params:
+  kp_size: 5
+  draw_border: True
+  colormap: 'gist_rainbow'

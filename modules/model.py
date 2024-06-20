@@ -18,6 +18,13 @@ from pytorch_msssim import ssim
 import lpips
 
 
+def gram_matrix(feature_map):
+    (b, ch, h, w) = feature_map.size()
+    features = feature_map.view(b, ch, h * w)
+    G = torch.bmm(features, features.transpose(1, 2))
+    return G.div(ch * h * w)
+
+
 class Vgg19(torch.nn.Module):
     """
     Vgg19 network for perceptual loss.
@@ -161,7 +168,7 @@ class GeneratorFullModel(torch.nn.Module):
 
         self.loss_weights = train_params['loss_weights']
 
-        if sum(self.loss_weights['perceptual']) != 0:
+        if (sum(self.loss_weights['perceptual']) != 0) or (sum(self.loss_weights['style']) != 0):
             self.vgg = Vgg19()
             if torch.cuda.is_available():
                 self.vgg = self.vgg.cuda()
@@ -228,7 +235,26 @@ class GeneratorFullModel(torch.nn.Module):
                     value = torch.abs(x_vgg[i] - y_vgg[i].detach()).mean()
                     value_total += self.loss_weights['perceptual'][i] * value
             loss_values['perceptual'] = value_total
+            
+        
+        # style loss
+        if sum(self.loss_weights['style']) != 0:
+            value_total = 0
+            x_vgg = self.vgg(pyramide_generated['prediction_' + str(scale)])
+            y_vgg = self.vgg(pyramide_real['prediction_' + str(scale)])
+            
+            for i, weight in enumerate(self.loss_weights['style']):
+                value = torch.abs(gram_matrix(x_vgg[i]) - gram_matrix(y_vgg[i].detach())).mean()
+                value_total += weight * value
+            loss_values['style'] = value_total
+        
 
+        # L1 loss
+        if self.loss_weights['l1'] != 0:
+            value = torch.abs(x['driving'] - generated['prediction']).mean()
+            loss_values['l1'] = self.loss_weights['l1'] * value
+        
+        
         # equivariance loss
         if (self.loss_weights['equivariance_shift'] + self.loss_weights['equivariance_affine']) != 0:
             transform = Transform(x['driving'].shape[0], **self.train_params['transform_params'])

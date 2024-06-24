@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import DataLoader
 from logger import Logger
 from modules.model import GeneratorFullModel
-from torch.optim.lr_scheduler import MultiStepLR
+from torch.optim.lr_scheduler import MultiStepLR, LambdaLR
 from torch.nn.utils import clip_grad_norm_
 from torch.nn import functional as F
 from frames_dataset import DatasetRepeater
@@ -50,11 +50,17 @@ def train_test(config, inpainting_network, bg_predictor, dense_motion_network, c
     else:
         start_epoch = 0
 
+    # def lambda_rule(epoch):
+    #     lr_l = 1.0 - max(0, epoch - 49) / float(50)
+    #     return lr_l
+    # scheduler_optimizer = LambdaLR(optimizer, lr_lambda=lambda_rule)
+    
     scheduler_optimizer = MultiStepLR(optimizer, train_params['epoch_milestones'], gamma=0.1,
                                       last_epoch=start_epoch - 1)
     if bg_predictor:
         scheduler_bg_predictor = MultiStepLR(optimizer_bg_predictor, train_params['epoch_milestones'],
                                               gamma=0.1, last_epoch=start_epoch - 1)
+        # scheduler_bg_predictor = LambdaLR(optimizer, lr_lambda=lambda_rule)
 
     if 'num_repeats' in train_params or train_params['num_repeats'] != 1:
         dataset = DatasetRepeater(dataset, train_params['num_repeats'])

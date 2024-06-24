@@ -26,28 +26,11 @@ class PixelwiseFlowPredictor(nn.Module):
 
     def __init__(self, block_expansion, num_blocks, max_features, num_regions, num_channels,
                  estimate_occlusion_map=False, scale_factor=1, region_var=0.01,
-                 use_covar_heatmap=False, use_deformed_source=True, revert_axis_swap=False):
+                 use_covar_heatmap=False, use_deformed_source=True, revert_axis_swap=False, mode='conv_concat'):
         super(PixelwiseFlowPredictor, self).__init__()
-        self.hourglass = Hourglass(block_expansion=block_expansion,
-                                   in_features=(num_regions + 1) * (num_channels * use_deformed_source + 1),
-                                   max_features=max_features, num_blocks=num_blocks)
-
-
-        self.renderer = SMPLRenderer(map_name="par")
-        self.smpl_model = SMPL('./SMPLDataset/checkpoints/smpl_model.pkl').eval()
-        self.smpl_model.requires_grad_(False)
-        self.renderer.set_ambient_light()
-
-        self.mask = SMPLConv(in_channels=self.hourglass.out_filters, out_channels=num_regions + 1, kernel_size=7,smpl_dim=85*2, demodulate=False)
-
-        if estimate_occlusion_map:
-            self.occlusion = SMPLConv(in_channels=self.hourglass.out_filters, out_channels=1, kernel_size=7,smpl_dim=85*2, demodulate=False)
-
-        else:
-            self.occlusion = None
-
-        self.combine_mask = nn.Conv2d(2+2+1, 1, kernel_size=(3, 3), padding=(1, 1))
-
+        self.conv_mode = mode.split('_')[0]
+        self.flow_mode = mode.split('_')[1]
+        
         self.num_regions = num_regions
         self.scale_factor = scale_factor
         self.region_var = region_var
@@ -57,6 +40,36 @@ class PixelwiseFlowPredictor(nn.Module):
 
         if self.scale_factor != 1:
             self.down = AntiAliasInterpolation2d(num_channels, self.scale_factor)
+        
+        self.hourglass = Hourglass(block_expansion=block_expansion,
+                                   in_features=(num_regions + 1) * (num_channels * use_deformed_source + 1),
+                                #    in_features=(num_regions + 1) * (num_channels * use_deformed_source + 1)+2*3,
+                                   max_features=max_features, num_blocks=num_blocks)
+
+
+        self.renderer = SMPLRenderer(map_name="par")
+        self.smpl_model = SMPL('./SMPLDataset/checkpoints/smpl_model.pkl').eval()
+        self.smpl_model.requires_grad_(False)
+        self.renderer.set_ambient_light()
+
+        num_flows = num_regions + 1 if self.flow_mode != 'concat' else num_regions + 2
+        if self.conv_mode == 'smplstyle':
+            self.mask = SMPLConv(in_channels=self.hourglass.out_filters, out_channels=num_flows, kernel_size=7,smpl_dim=85*2, demodulate=False)
+        else:
+            self.mask = nn.Conv2d(self.hourglass.out_filters, num_flows, kernel_size=(7, 7), padding=(3, 3))
+
+        if estimate_occlusion_map:
+            if self.conv_mode == 'smplstyle':
+                self.occlusion = SMPLConv(in_channels=self.hourglass.out_filters, out_channels=1, kernel_size=7,smpl_dim=85*2, demodulate=False)
+            else:
+                self.occlusion = nn.Conv2d(self.hourglass.out_filters, 1, kernel_size=(7, 7), padding=(3, 3))
+
+        else:
+            self.occlusion = None
+
+        if self.flow_mode == 'cncvr' or self.flow_mode == 'vscvr':
+            self.combine_mask = nn.Conv2d(2+2+1, 1, kernel_size=(3, 3), padding=(1, 1))
+
 
     def create_heatmap_representations(self, source_image, driving_region_params, source_region_params):
         """
@@ -149,9 +162,12 @@ class PixelwiseFlowPredictor(nn.Module):
 
         return T, occlu_map
 
-    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None):
+    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None):
         if self.scale_factor != 1:
             source_image = self.down(source_image)
+            if source_smpl_rdr is not None and driving_smpl_rdr is not None:
+                source_smpl_rdr = self.down(source_smpl_rdr)
+                driving_smpl_rdr = self.down(driving_smpl_rdr)
 
         bs, _, h, w = source_image.shape
 
@@ -161,49 +177,86 @@ class PixelwiseFlowPredictor(nn.Module):
         sparse_motion = self.create_sparse_motions(source_image, driving_region_params,
                                                    source_region_params, bg_params=bg_params)
         deformed_source = self.create_deformed_source_image(source_image, sparse_motion)
+        sparse_motion = sparse_motion.permute(0, 1, 4, 2, 3)
+        
         if self.use_deformed_source:
             predictor_input = torch.cat([heatmap_representation, deformed_source], dim=2) # region_heatmaps and deformed_source_features
         else:
             predictor_input = heatmap_representation
         predictor_input = predictor_input.view(bs, -1, h, w)
+        if source_smpl_rdr is not None and driving_smpl_rdr is not None:
+            predictor_input = torch.cat([predictor_input, source_smpl_rdr, driving_smpl_rdr], dim=1)
+        prediction = self.hourglass(predictor_input)
+
 
         driving_smpl = driving_smpl.squeeze(-1)
         source_smpl = source_smpl.squeeze(-1)
-
         smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
 
-        prediction = self.hourglass(predictor_input)
 
-        mask = self.mask(prediction, smpl)
+        if self.conv_mode == 'smplstyle':
+            mask = self.mask(prediction, smpl)
+        else:
+            mask = self.mask(prediction)
+        
+        if self.flow_mode != 'vsbmp' and self.flow_mode != 'concat':
+            mask = F.softmax(mask, dim=1)
+            mask = mask.unsqueeze(2)
+            deformation = (sparse_motion * mask).sum(dim=1)
 
-        sparse_motion = sparse_motion.permute(0, 1, 4, 2, 3)
+            if self.flow_mode == 'vscvr':
+                smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl)
+                smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
+                smpl_mask = smpl_mask.unsqueeze(1)
+                N,_,_,H,W = sparse_motion.shape
+                smpl_flow = F.interpolate(smpl_flow.view(N,2,smpl_flow.shape[-2],smpl_flow.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,2,H,W)
+                smpl_mask = F.interpolate(smpl_mask.view(N,1,smpl_mask.shape[-2],smpl_mask.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,H,W)
+                smpl_mask = smpl_mask.unsqueeze(2)
 
-        # conv cover
-        smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
-        smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
-        smpl_mask = smpl_mask.unsqueeze(1)
-        N,_,_,H,W = sparse_motion.shape
-        smpl_flow = F.interpolate(smpl_flow.view(N,2,smpl_flow.shape[-2],smpl_flow.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,2,H,W)
-        smpl_mask = F.interpolate(smpl_mask.view(N,1,smpl_mask.shape[-2],smpl_mask.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,H,W)
+                deformation_smpl = (smpl_flow * smpl_mask).sum(dim=1)
+                mask_index = (smpl_mask == 1.0).squeeze(1).repeat(1, 2, 1, 1)
+                deformation[mask_index] = deformation_smpl[mask_index]
+                out_dict['smpl_mask'] = smpl_mask.squeeze(2)
+    
+            if self.flow_mode == 'cncvr':
+                smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
+                smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
+                smpl_mask = smpl_mask.unsqueeze(1)
+                N,_,_,H,W = sparse_motion.shape
+                smpl_flow = F.interpolate(smpl_flow.view(N,2,smpl_flow.shape[-2],smpl_flow.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,2,H,W)
+                smpl_mask = F.interpolate(smpl_mask.view(N,1,smpl_mask.shape[-2],smpl_mask.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,H,W)
+                smpl_mask = smpl_mask.unsqueeze(2)
+                deformation_smpl = (smpl_flow * smpl_mask).sum(dim=1)
+                combine_mask = self.combine_mask(torch.cat([smpl_mask.squeeze(2), deformation, deformation_smpl], dim=1)).repeat(1, 2, 1, 1)
+                deformation = deformation * (1 - combine_mask) + deformation_smpl * combine_mask
+                out_dict['combine_mask'] = combine_mask[:, 0:1]
+                out_dict['smpl_mask'] = smpl_mask.squeeze(2)
+        else:
+            smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
+            smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
+            smpl_mask = smpl_mask.unsqueeze(1)
+            N,_,_,H,W = sparse_motion.shape
+            smpl_flow = F.interpolate(smpl_flow.view(N,2,smpl_flow.shape[-2],smpl_flow.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,2,H,W)
+            sparse_motion = torch.cat([sparse_motion, smpl_flow], dim=1)
+            if self.flow_mode == 'vsbmp':
+                smpl_mask = F.interpolate(smpl_mask.view(N,1,smpl_mask.shape[-2],smpl_mask.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,H,W)
+                mask = torch.cat([mask, smpl_mask], dim=1)
+                # out_dict['smpl_mask'] = smpl_mask
+            # else:
+                # out_dict['smpl_mask'] = mask[:,-1]
+            mask = F.softmax(mask, dim=1)
+            mask = mask.unsqueeze(2)
+            deformation = (sparse_motion * mask).sum(dim=1)
 
-        mask = F.softmax(mask, dim=1)
-        mask = mask.unsqueeze(2)
-        smpl_mask = smpl_mask.unsqueeze(2)
-
-        deformation = (sparse_motion * mask).sum(dim=1)
-        deformation_smpl = (smpl_flow * smpl_mask).sum(dim=1)
-
-        combine_mask = self.combine_mask(torch.cat([smpl_mask.squeeze(2), deformation, deformation_smpl], dim=1)).repeat(1, 2, 1, 1)
-        deformation = deformation * (1 - combine_mask) + deformation_smpl * combine_mask
         deformation = deformation.permute(0, 2, 3, 1)
 
-        out_dict['combine_mask'] = combine_mask[:, 0:1]
-        out_dict['smpl_mask'] = smpl_mask.squeeze(2)
         out_dict['optical_flow'] = deformation
 
         if self.occlusion:
-            occlusion_map = torch.sigmoid(self.occlusion(prediction, smpl))
-
+            if self.conv_mode == 'smplstyle':
+                occlusion_map = torch.sigmoid(self.occlusion(prediction, smpl))
+            else:
+                occlusion_map = torch.sigmoid(self.occlusion(prediction))
             out_dict['occlusion_map'] = occlusion_map
 
         return out_dict

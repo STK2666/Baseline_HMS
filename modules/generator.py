@@ -24,24 +24,28 @@ class Generator(nn.Module):
     """
 
     def __init__(self, num_channels, num_regions, block_expansion, max_features, num_down_blocks,
-                 num_bottleneck_blocks, pixelwise_flow_predictor_params=None, skips=False, revert_axis_swap=True):
+                 num_bottleneck_blocks, pixelwise_flow_predictor_params=None, skips=False, revert_axis_swap=True,mode='conv_concat'):
         super(Generator, self).__init__()
-
+        self.mode = mode.split('_')[0]
+        self.num_channels = num_channels
+        self.skips = skips
         if pixelwise_flow_predictor_params is not None:
             self.pixelwise_flow_predictor = PixelwiseFlowPredictor(num_regions=num_regions, num_channels=num_channels,
                                                                    revert_axis_swap=revert_axis_swap,
+                                                                   mode=mode,
                                                                    **pixelwise_flow_predictor_params)
         else:
             self.pixelwise_flow_predictor = None
 
         self.first = SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))
 
-        style_encoder_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
-        for i in range(num_down_blocks+3):
-            in_features = min(max_features, block_expansion * (2 ** i))
-            out_features = min(max_features, block_expansion * (2 ** (i + 1)))
-            style_encoder_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
-        self.style_encoder = nn.ModuleList(style_encoder_blocks)
+        if self.mode == 'smplstyle' or self.mode == 'style':
+            style_encoder_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
+            for i in range(num_down_blocks+3):
+                in_features = min(max_features, block_expansion * (2 ** i))
+                out_features = min(max_features, block_expansion * (2 ** (i + 1)))
+                style_encoder_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+            self.style_encoder = nn.ModuleList(style_encoder_blocks)
 
         down_blocks = []
         for i in range(num_down_blocks):
@@ -54,33 +58,29 @@ class Generator(nn.Module):
         for i in range(num_down_blocks):
             in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
             out_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i - 1)))
-            up_blocks.append(SMPLStyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
-            up_blocks.append(SMPLStyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
-            # up_blocks.append(StyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
-            # up_blocks.append(StyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
-            # up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+            if self.mode == 'smplstyle':
+                up_blocks.append(SMPLStyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
+                up_blocks.append(SMPLStyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
+            elif self.mode == 'style':
+                up_blocks.append(StyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
+                up_blocks.append(StyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
+            else:
+                up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+                up_blocks.append(SameBlock2d(out_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
         self.up_blocks = nn.ModuleList(up_blocks)
 
-        # res_blocks = []
-        # for i in range(num_down_blocks):
-        #     in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
-        #     res_blocks.append(StyledResBlock2d(in_features, kernel_size=3, style_dim=max_features))
-        #     res_blocks.append(StyledResBlock2d(in_features, kernel_size=3, style_dim=max_features))
-        # self.res_blocks = nn.ModuleList(res_blocks)
 
-        # bottle_blocks = []
         self.bottleneck = torch.nn.Sequential()
         in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
         for i in range(num_bottleneck_blocks):
             self.bottleneck.add_module('r' + str(i), ResBlock2d(in_features, kernel_size=(3, 3), padding=(1, 1)))
-            # bottle_blocks.append(StyledResBlock2d(in_features, kernel_size=3, style_dim=max_features))
-            # bottle_blocks.append(SMPLStyledResBlock2d(in_features, kernel_size=3, style_dim=max_features))
-        # self.bottleneck = nn.ModuleList(bottle_blocks)
-        # self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
-        # self.final = ModulatedConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
-        self.final = SMPLStyledConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
-        self.num_channels = num_channels
-        self.skips = skips
+
+        if self.mode == 'smplstyle':
+            self.final = SMPLStyledConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
+        elif self.mode == 'style':
+            self.final = ModulatedConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
+        else:
+            self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
 
     @staticmethod
     def deform_input(inp, optical_flow):
@@ -113,15 +113,16 @@ class Generator(nn.Module):
             out = input_previous if input_previous is not None else input_skip
         return out
 
-    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None):
-        style = self.style_encoder[0](source_image)
-        for i in range(len(self.style_encoder)-1):
-            style = self.style_encoder[i+1](style)
-        style = F.adaptive_avg_pool2d(style, (1, 1)).view(style.shape[0], -1)
+    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None):
+        if self.mode == 'smplstyle' or self.mode == 'style':
+            style = self.style_encoder[0](source_image)
+            for i in range(len(self.style_encoder)-1):
+                style = self.style_encoder[i+1](style)
+            style = F.adaptive_avg_pool2d(style, (1, 1)).view(style.shape[0], -1)
 
-        source_smpl = source_smpl.squeeze(-1)
-        driving_smpl = driving_smpl.squeeze(-1)
-        smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
+            source_smpl = source_smpl.squeeze(-1)
+            driving_smpl = driving_smpl.squeeze(-1)
+            smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
 
         out = self.first(source_image)
         skips = [out]
@@ -136,11 +137,14 @@ class Generator(nn.Module):
                                                           driving_region_params=driving_region_params,
                                                           source_region_params=source_region_params,
                                                           driving_smpl=driving_smpl, source_smpl=source_smpl,
+                                                            source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr,
                                                           bg_params=bg_params)
             output_dict["deformed"] = self.deform_input(source_image, motion_params['optical_flow'])
             output_dict["optical_flow"] = motion_params['optical_flow']
-            output_dict['combine_mask'] = motion_params['combine_mask']
-            output_dict['smpl_mask'] = motion_params['smpl_mask']
+            if 'combine_mask' in motion_params:
+                output_dict['combine_mask'] = motion_params['combine_mask']
+            if 'smpl_mask' in motion_params:
+                output_dict['smpl_mask'] = motion_params['smpl_mask']
             if 'occlusion_map' in motion_params:
                 output_dict['occlusion_map'] = motion_params['occlusion_map']
         else:
@@ -150,28 +154,29 @@ class Generator(nn.Module):
 
         out = self.bottleneck(out)
         
-        # for i in range(len(self.bottleneck)):
-            # out = self.bottleneck[i](out, style)
-            # out = self.bottleneck[i](out, smpl, style)
-
-        # for i in range(len(self.up_blocks)):
         for i in range(len(self.down_blocks)):
             if self.skips:
                 out = self.apply_optical(input_skip=skips[-(i + 1)], input_previous=out, motion_params=motion_params)
-            # out = self.up_blocks[i](out)
-            # out = self.res_blocks[i*2](out, style)
-            # out = self.res_blocks[i*2+1](out, style)
-            # out = self.up_blocks[i](out, style)
-            # out = self.up_blocks[i*2](out, style)
-            # out = self.up_blocks[i*2+1](out, style)
-            # out = self.up_blocks[i](out, smpl, style)
-            out = self.up_blocks[i*2](out, smpl, style)
-            out = self.up_blocks[i*2+1](out, smpl, style)
+                
+            if self.mode == 'smplstyle':
+                out = self.up_blocks[i*2](out, smpl, style)
+                out = self.up_blocks[i*2+1](out, smpl, style)
+            elif self.mode == 'style':
+                out = self.up_blocks[i*2](out, style)
+                out = self.up_blocks[i*2+1](out, style)
+            else:
+                out = self.up_blocks[i*2](out)
+                out = self.up_blocks[i*2+1](out)
         if self.skips:
             out = self.apply_optical(input_skip=skips[0], input_previous=out, motion_params=motion_params)
-        # out = self.final(out)
-        # out = self.final(out, style)
-        out = self.final(out, smpl, style)
+        
+        if self.mode == 'smplstyle':
+            out = self.final(out, smpl, style)
+        elif self.mode == 'style':
+            out = self.final(out, style)
+        else:
+            out = self.final(out)
+
         out = torch.sigmoid(out)
 
         if self.skips:

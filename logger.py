@@ -95,6 +95,12 @@ class Logger:
         # self.visualize_rec(inp, out)
         if self.epoch == 0:
             self.visualize_rec(inp, out)
+        if self.epoch == 9:
+            self.save_cpk()
+        if self.epoch == 19:
+            self.save_cpk()
+        if self.epoch == 79:
+            self.save_cpk()
         if (self.epoch + 1) % self.checkpoint_freq == 0:
             self.save_cpk()
         if (self.epoch + 1) % 10 == 0:

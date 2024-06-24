@@ -26,7 +26,7 @@ model_params:
     num_down_blocks: 3
     num_bottleneck_blocks: 2
     skips: True
-    mode: 'smplstyle_concat'
+    mode: 'smplstyle_vsbmp'
     pixelwise_flow_predictor_params:
       block_expansion: 64
       # max_features: 1024

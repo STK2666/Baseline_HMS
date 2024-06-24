@@ -138,8 +138,11 @@ class FramesDataset(Dataset):
         json_path = os.path.join(path, 'kptsmpls')
         if self.is_train:
             frames = os.listdir(video_path)
+            frames.sort()
             num_frames = len(frames)
             frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
+            frame_idx[0] = 0
+            # print(frame_idx)
 
             if self.frame_shape is not None:
                 resize_fn = partial(resize, output_shape=self.frame_shape)

@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 import unittest
 
 import os
-os.environ['CUDA_HOME'] = '/disk1/tongkai/cuda-11.4'
+os.environ['CUDA_HOME'] = '/usr/local/cuda'
 
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 

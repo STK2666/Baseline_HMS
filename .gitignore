@@ -163,3 +163,5 @@ log/
 wandb/
 SMPLDataset/checkpoints/
 .vscode/
+config/
+*.sh

@@ -141,7 +141,7 @@ class FramesDataset(Dataset):
             frames.sort()
             num_frames = len(frames)
             frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
-            frame_idx[0] = 0
+            # frame_idx[0] = 0
             # print(frame_idx)
 
             if self.frame_shape is not None:

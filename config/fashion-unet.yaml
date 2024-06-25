@@ -26,16 +26,19 @@ model_params:
     num_down_blocks: 3
     num_bottleneck_blocks: 2
     skips: True
+    # mode: 'conv_baseline'
     mode: 'smplstyle_concat'
     pixelwise_flow_predictor_params:
       block_expansion: 64
       # max_features: 1024
       max_features: 256
-      num_blocks: 5
+      num_blocks: 3
       scale_factor: 0.25
       use_deformed_source: True
       use_covar_heatmap: True
       estimate_occlusion_map: True
+      unsupervised_flow: True
+      smpl_rdr_input: False
   bg_predictor_params:
     block_expansion: 32
     max_features: 256
@@ -46,7 +49,7 @@ model_params:
     block_expansion: 32
     max_features: 256
     scale_factor: 0.25
-    num_blocks: 5
+    num_blocks: 3
     pca_based: True
     pad: 0
     fast_svd: False
@@ -69,7 +72,7 @@ train_params:
   loss_weights:
     perceptual: [10, 10, 10, 10, 10]
     style: [0.1, 0.1, 0.1, 0.1, 0.1]
-    l1: 5
+    l1: 50
     # style: [0, 0, 0, 0, 0]
     # perceptual: [125, 125, 125, 125, 125]
     # perceptual: [40, 40, 40, 40, 40]

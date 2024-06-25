@@ -26,7 +26,8 @@ class PixelwiseFlowPredictor(nn.Module):
 
     def __init__(self, block_expansion, num_blocks, max_features, num_regions, num_channels,
                  estimate_occlusion_map=False, scale_factor=1, region_var=0.01,
-                 use_covar_heatmap=False, use_deformed_source=True, revert_axis_swap=False, mode='conv_concat'):
+                 use_covar_heatmap=False, use_deformed_source=True, revert_axis_swap=False, 
+                 mode='conv_concat', unsupervised_flow=False, smpl_rdr_input=False):
         super(PixelwiseFlowPredictor, self).__init__()
         self.conv_mode = mode.split('_')[0]
         self.flow_mode = mode.split('_')[1]
@@ -37,14 +38,26 @@ class PixelwiseFlowPredictor(nn.Module):
         self.use_covar_heatmap = use_covar_heatmap
         self.use_deformed_source = use_deformed_source
         self.revert_axis_swap = revert_axis_swap
+        self.unsupervised_flow = unsupervised_flow
+        self.smpl_rdr_input = smpl_rdr_input
+        
 
         if self.scale_factor != 1:
             self.down = AntiAliasInterpolation2d(num_channels, self.scale_factor)
         
+        if self.smpl_rdr_input:
+            hourglass_in_features = (num_regions + 1) * (num_channels * use_deformed_source + 1) + 2*num_channels
+        else:
+            hourglass_in_features = (num_regions + 1) * (num_channels * use_deformed_source + 1)
         self.hourglass = Hourglass(block_expansion=block_expansion,
-                                   in_features=(num_regions + 1) * (num_channels * use_deformed_source + 1),
-                                #    in_features=(num_regions + 1) * (num_channels * use_deformed_source + 1)+2*3,
+                                   in_features=hourglass_in_features,
                                    max_features=max_features, num_blocks=num_blocks)
+        
+        if self.unsupervised_flow:
+            uns_hourglass = Hourglass(block_expansion=block_expansion, in_features=num_channels*3,
+                                        max_features=max_features, num_blocks=num_blocks)
+            self.uns_flow = nn.Sequential(uns_hourglass,
+                                          nn.Conv2d(uns_hourglass.out_filters, 2, kernel_size=(7, 7), padding=(3, 3)))
 
 
         self.renderer = SMPLRenderer(map_name="par")
@@ -53,6 +66,7 @@ class PixelwiseFlowPredictor(nn.Module):
         self.renderer.set_ambient_light()
 
         num_flows = num_regions + 1 if self.flow_mode != 'concat' else num_regions + 2
+        num_flows = num_flows + 1 if self.unsupervised_flow else num_flows
         if self.conv_mode == 'smplstyle':
             self.mask = SMPLConv(in_channels=self.hourglass.out_filters, out_channels=num_flows, kernel_size=7,smpl_dim=85*2, demodulate=False)
         else:
@@ -165,7 +179,7 @@ class PixelwiseFlowPredictor(nn.Module):
     def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None):
         if self.scale_factor != 1:
             source_image = self.down(source_image)
-            if source_smpl_rdr is not None and driving_smpl_rdr is not None:
+            if self.smpl_rdr_input or self.unsupervised_flow:
                 source_smpl_rdr = self.down(source_smpl_rdr)
                 driving_smpl_rdr = self.down(driving_smpl_rdr)
 
@@ -184,7 +198,7 @@ class PixelwiseFlowPredictor(nn.Module):
         else:
             predictor_input = heatmap_representation
         predictor_input = predictor_input.view(bs, -1, h, w)
-        if source_smpl_rdr is not None and driving_smpl_rdr is not None:
+        if self.smpl_rdr_input:
             predictor_input = torch.cat([predictor_input, source_smpl_rdr, driving_smpl_rdr], dim=1)
         prediction = self.hourglass(predictor_input)
 
@@ -238,6 +252,9 @@ class PixelwiseFlowPredictor(nn.Module):
             N,_,_,H,W = sparse_motion.shape
             smpl_flow = F.interpolate(smpl_flow.view(N,2,smpl_flow.shape[-2],smpl_flow.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,2,H,W)
             sparse_motion = torch.cat([sparse_motion, smpl_flow], dim=1)
+            if self.unsupervised_flow:
+                uns_flow = self.uns_flow(torch.cat([source_image, source_smpl_rdr, driving_smpl_rdr], dim=1))
+                sparse_motion = torch.cat([sparse_motion, uns_flow.unsqueeze(1)], dim=1)
             if self.flow_mode == 'vsbmp':
                 smpl_mask = F.interpolate(smpl_mask.view(N,1,smpl_mask.shape[-2],smpl_mask.shape[-1]), size=(H,W), mode='bilinear', align_corners=False).view(N,1,H,W)
                 mask = torch.cat([mask, smpl_mask], dim=1)

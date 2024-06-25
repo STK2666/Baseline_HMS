@@ -27,7 +27,7 @@ def generate_video(config, inpainting_network, bg_predictor, dense_motion_networ
         with torch.no_grad():
             if torch.cuda.is_available():
                 x['video'] = x['video'].cuda()
-            length = 60
+            length = 30
             length_list = [length for i in range(math.ceil(x['video'].shape[2]/length))]
             if x['video'].shape[2] % length != 0:
                 length_list[-1] = x['video'].shape[2] % length
@@ -71,7 +71,8 @@ def generate_video(config, inpainting_network, bg_predictor, dense_motion_networ
 
                 out = inpainting_network(source, source_region_params=source_region_params,
                            driving_region_params=driving_region_params, bg_params=bg_params,
-                           driving_smpl=driving_smpl, source_smpl=source_smpl)
+                           driving_smpl=driving_smpl, source_smpl=source_smpl,
+                           driving_smpl_rdr=driving_rdr, source_smpl_rdr=source_rdr)
                 prediction = out['prediction'].data.cpu().numpy()
 
                 for frame in range(prediction.shape[0]):

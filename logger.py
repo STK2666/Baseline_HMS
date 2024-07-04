@@ -95,8 +95,15 @@ class Logger:
         # self.visualize_rec(inp, out)
         if self.epoch == 0:
             self.visualize_rec(inp, out)
+        if self.epoch == 9:
+            self.save_cpk()
+        if self.epoch == 19:
+            self.save_cpk()
+        if self.epoch == 79:
+            self.save_cpk()
         if (self.epoch + 1) % self.checkpoint_freq == 0:
             self.save_cpk()
+        if (self.epoch + 1) % 10 == 0:
             self.visualize_rec(inp, out)
 
 def draw_colored_heatmap(heatmap, colormap, bg_color):
@@ -171,7 +178,7 @@ class Visualizer:
         source_rdr = np.transpose(source_rdr, [0, 2, 3, 1])
         images.append((source_rdr, source_region_params))
 
-        # Driving image with  region centers
+        # Driving image with region centers
         driving_region_params = out['driving_region_params']['shift'].data.cpu().numpy()
         driving = driving.data.cpu().numpy()
         driving = np.transpose(driving, [0, 2, 3, 1])
@@ -217,6 +224,20 @@ class Visualizer:
             source_heatmap = F.interpolate(out['source_region_params']['heatmap'], size=source.shape[1:3])
             source_heatmap = np.transpose(source_heatmap.data.cpu().numpy(), [0, 2, 3, 1])
             images.append(draw_colored_heatmap(source_heatmap, self.colormap, self.region_bg_color))
+
+        # SMPL mask
+        if 'smpl_mask' in out:
+            smpl_mask = out['smpl_mask'].data.cpu().repeat(1, 3, 1, 1)
+            smpl_mask = F.interpolate(smpl_mask, size=source.shape[1:3]).numpy()
+            smpl_mask = np.transpose(smpl_mask, [0, 2, 3, 1])
+            images.append(smpl_mask)
+
+        # Combine mask
+        if 'combine_mask' in out:
+            combine_mask = out['combine_mask'].data.cpu().repeat(1, 3, 1, 1)
+            combine_mask = F.interpolate(combine_mask, size=source.shape[1:3]).numpy()
+            combine_mask = np.transpose(combine_mask, [0, 2, 3, 1])
+            images.append(combine_mask)
 
         image = self.create_image_grid(*images)
         image = (255 * image).astype(np.uint8)

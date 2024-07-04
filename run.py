@@ -60,8 +60,9 @@ if __name__ == "__main__":
     if opt.checkpoint is not None:
         log_dir = os.path.join(*os.path.split(opt.checkpoint)[:-1])
     else:
-        log_dir = os.path.join(opt.log_dir, os.path.basename(opt.config).split('.')[0])
-        log_dir += ' ' + strftime("%d_%m_%y_%H.%M.%S", gmtime())
+        log_dir = os.path.join(opt.log_dir, opt.run_name)
+        if os.path.exists(log_dir):
+            log_dir += '-' + strftime("%d_%m_%y_%H.%M.%S", gmtime())
 
     inpainting = Generator(num_regions=config['model_params']['common_params']['num_regions'],
                           num_channels=config['model_params']['common_params']['num_channels'],

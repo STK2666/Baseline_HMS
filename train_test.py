@@ -2,7 +2,11 @@ from tqdm import trange,tqdm
 import torch
 from torch.utils.data import DataLoader
 from logger import Logger
+
 from modules.model import GeneratorFullModel
+from modules.misc import requires_grad, discriminator_loss_func, image_to_edge_tensor
+from modules.discriminator.discriminator import Discriminator
+
 from torch.optim.lr_scheduler import MultiStepLR, LambdaLR
 from torch.nn.utils import clip_grad_norm_
 from torch.nn import functional as F
@@ -40,7 +44,15 @@ def train_test(config, inpainting_network, bg_predictor, dense_motion_network, c
         optimizer_bg_predictor = torch.optim.Adam(
             [{'params':bg_predictor.parameters(),'initial_lr': train_params['lr_generator']}],
             lr=train_params['lr_generator'], betas=(0.5, 0.999), weight_decay = 1e-4)
-
+        
+    discriminator = None
+    optimizer_discriminator = None
+    if train_params['loss_weights']['adv'] != 0:
+        discriminator = Discriminator(image_in_channels=3, edge_in_channels=2).to(next(dense_motion_network.parameters()).device)
+        optimizer_discriminator = torch.optim.Adam(
+            [{'params':discriminator.parameters(),'initial_lr': train_params['lr_generator']*0.1}],
+            lr=train_params['lr_generator']*0.1, betas=(0.5, 0.999), weight_decay = 1e-4)
+                
     if checkpoint is not None:
         start_epoch = Logger.load_cpk(
             checkpoint, inpainting_network = inpainting_network, dense_motion_network = dense_motion_network, bg_predictor = bg_predictor,
@@ -67,7 +79,7 @@ def train_test(config, inpainting_network, bg_predictor, dense_motion_network, c
     dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True,
                             num_workers=train_params['dataloader_workers'], drop_last=True)
 
-    generator_full = GeneratorFullModel(bg_predictor, dense_motion_network, inpainting_network, train_params)
+    generator_full = GeneratorFullModel(bg_predictor, dense_motion_network, inpainting_network, train_params, discriminator=discriminator)
 
     if torch.cuda.is_available():
         generator_full = torch.nn.DataParallel(generator_full).cuda()
@@ -93,6 +105,15 @@ def train_test(config, inpainting_network, bg_predictor, dense_motion_network, c
                     x['driving_smpl'] = x['driving_smpl'].cuda()
                     x['source_smpl'] = x['source_smpl'].cuda()
 
+                # ---------
+                # Generator
+                # ---------
+                requires_grad(dense_motion_network, True)
+                requires_grad(inpainting_network, True)
+                if bg_predictor and epoch>=bg_start:
+                    requires_grad(bg_predictor, True)
+                requires_grad(discriminator, False)
+                
                 losses_generator, generated = generator_full(x)
                 loss_values = [val.mean() for val in losses_generator.values()]
                 loss = sum(loss_values)
@@ -107,6 +128,30 @@ def train_test(config, inpainting_network, bg_predictor, dense_motion_network, c
                 if bg_predictor and epoch>=bg_start:
                     optimizer_bg_predictor.step()
                     optimizer_bg_predictor.zero_grad()
+                    
+                # ---------
+                # Discriminator
+                # ---------
+                requires_grad(dense_motion_network, False)
+                requires_grad(inpainting_network, False)
+                if bg_predictor and epoch>=bg_start:
+                    requires_grad(bg_predictor, False)
+                requires_grad(discriminator, True)
+                
+                edge, gray_image = image_to_edge_tensor(x['driving'])
+                
+                real_pred, real_pred_edge = discriminator(x['driving'], gray_image, edge, is_real=True)
+                fake_pred, fake_pred_edge = discriminator(generated['prediction'].detach(), gray_image, edge, is_real=False)
+
+                
+                losses_discriminator = discriminator_loss_func(real_pred, fake_pred, real_pred_edge, fake_pred_edge, edge)
+                loss_values = [val.mean() for val in losses_discriminator.values()]
+                loss = sum(loss_values)
+                loss.backward()
+                
+                clip_grad_norm_(discriminator.parameters(), max_norm=10, norm_type = math.inf)
+                optimizer_discriminator.step()
+                optimizer_discriminator.zero_grad()
 
                 losses = {key: value.mean().detach().data.cpu().numpy() for key, value in losses_generator.items()}
                 logger.log_iter(losses=losses)

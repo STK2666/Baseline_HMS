@@ -11,6 +11,7 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 from modules.util import AntiAliasInterpolation2d, make_coordinate_grid
+from modules.misc import image_to_edge_tensor
 from torchvision import models
 import numpy as np
 from torch.autograd import grad
@@ -149,10 +150,12 @@ def detach_kp(kp):
 
 
 class GeneratorFullModel(torch.nn.Module):
-    def __init__(self, bg_predictor, region_predictor, generator, train_params):
+    def __init__(self, bg_predictor, region_predictor, generator, train_params, discriminator=None):
         super(GeneratorFullModel, self).__init__()
         self.region_predictor = region_predictor
         self.generator = generator
+        if discriminator is not None:
+            self.discriminator = discriminator
 
         self.bg_predictor = None
         if bg_predictor:
@@ -172,43 +175,6 @@ class GeneratorFullModel(torch.nn.Module):
             self.vgg = Vgg19()
             if torch.cuda.is_available():
                 self.vgg = self.vgg.cuda()
-
-
-    # def forward_test(self, x):
-    #     source_region_params = self.region_predictor(x['source_rdr'], x['source_smpl'])
-    #     driving_region_params = self.region_predictor(x['driving_rdr'], x['driving_smpl'])
-
-    #     bg_params = self.bg_predictor(x['source'], x['source_rdr'], x['driving_rdr'])
-    #     generated = self.generator(x['source'], source_region_params=source_region_params,
-    #                                driving_region_params=driving_region_params, bg_params=bg_params)
-    #     generated.update({'source_region_params': source_region_params, 'driving_region_params': driving_region_params})
-
-    #     loss_values = {}
-
-    #     pyramide_real = self.pyramid(x['driving'])
-    #     pyramide_generated = self.pyramid(generated['prediction'])
-
-    #     if sum(self.loss_weights['perceptual']) != 0:
-    #         value_total = 0
-    #         for scale in self.scales:
-    #             x_vgg = self.vgg(pyramide_generated['prediction_' + str(scale)])
-    #             y_vgg = self.vgg(pyramide_real['prediction_' + str(scale)])
-
-    #             for i, weight in enumerate(self.loss_weights['perceptual']):
-    #                 value = torch.abs(x_vgg[i] - y_vgg[i].detach()).mean()
-    #                 value_total += self.loss_weights['perceptual'][i] * value
-    #         loss_values['perceptual'] = value_total
-
-    #     lpips_model = lpips.LPIPS(net='alex', verbose=False).cuda()
-    #     loss_values['lpips'] = lpips_model(x['driving'], generated['prediction'])
-
-    #     l1_loss = F.l1_loss(x['driving'], generated['prediction'])
-    #     loss_values['L1'] = l1_loss
-
-    #     ssim_loss = ssim(x['driving'], generated['prediction'], data_range=1)
-    #     loss_values['ssim'] = ssim_loss
-
-    #     return loss_values, generated
 
     def forward(self, x):
         source_region_params = self.region_predictor(x['source_rdr'], x['source_smpl'])
@@ -285,6 +251,18 @@ class GeneratorFullModel(torch.nn.Module):
 
                 value = torch.abs(eye - value).mean()
                 loss_values['equivariance_affine'] = self.loss_weights['equivariance_affine'] * value
+                
+        # adversarial loss
+        if self.loss_weights['adv'] != 0:
+            criterion = nn.BCELoss()
 
+            real_edge, gray_image = image_to_edge_tensor(x['driving'], sigma=2.0)
+            fake_pred, fake_edge = self.discriminator(generated['prediction'], gray_image, real_edge, is_real=False)
+
+            real_target = torch.tensor(1.0).expand_as(fake_pred).to(fake_pred.device)
+            loss_adversarial = criterion(fake_pred, real_target)
+            loss_values['adv'] = self.loss_weights['adv'] * loss_adversarial
+            
+        
         return loss_values, generated
 

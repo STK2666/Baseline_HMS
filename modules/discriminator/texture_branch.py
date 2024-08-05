@@ -4,10 +4,10 @@ import torch.nn as nn
 from modules.misc import weights_init, spectral_norm
 
 
-class TextureBranch(nn.Module):
+class Discriminator(nn.Module):
 
     def __init__(self, in_channels=3, use_sigmoid=True, use_spectral_norm=True, init_weights=True):
-        super(TextureBranch, self).__init__()
+        super(Discriminator, self).__init__()
 
         self.use_sigmoid = use_sigmoid
 
@@ -46,7 +46,7 @@ class TextureBranch(nn.Module):
     def forward(self, image):
 
         image_pred = self.conv5(self.conv4(self.conv3(self.conv2(self.conv1(image)))))
-        
+
         if self.use_sigmoid:
             image_pred = torch.sigmoid(image_pred)
 

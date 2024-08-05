@@ -13,6 +13,8 @@ import torch.nn.functional as F
 from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d
 from modules.util import SMPLStyledResBlock2d, SMPLStyledUpBlock2d, SMPLStyledSameBlock2d
 from modules.util import StyledResBlock2d, StyledUpBlock2d, StyledSameBlock2d
+from modules.util import kpt2heatmap
+from utils.pose_utils import smpl2kpts
 from modules.new_conv import SMPLStyledConv2d, ModulatedConv2d
 from modules.pixelwise_flow_predictor import PixelwiseFlowPredictor
 from modules.super_resolution import RCAN
@@ -38,9 +40,11 @@ class Generator(nn.Module):
         else:
             self.pixelwise_flow_predictor = None
 
-        self.first = SameBlock2d(num_channels+1, block_expansion, kernel_size=(7, 7), padding=(3, 3))
+        self.first = SameBlock2d(num_channels+23, block_expansion, kernel_size=(7, 7), padding=(3, 3))
+        # self.first = SameBlock2d(num_channels+4, block_expansion, kernel_size=(7, 7), padding=(3, 3))
+        # self.first = SameBlock2d(num_channels+1, block_expansion, kernel_size=(7, 7), padding=(3, 3))
         self.pose_first = SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))
-        
+
         # if self.mode == 'smplstyle' or self.mode == 'style':
         #     style_encoder_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
         #     for i in range(num_down_blocks+3):
@@ -103,8 +107,8 @@ class Generator(nn.Module):
         else:
             self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
             # self.final = nn.Conv2d(block_expansion*2, num_channels, kernel_size=(7, 7), padding=(3, 3))
-        
-        self.sr = RCAN(num_channels=num_channels, num_feats=64, num_blocks=1, num_groups=1)
+
+        # self.sr = RCAN(num_channels=num_channels, num_feats=64, num_blocks=1, num_groups=1)
 
     @staticmethod
     def deform_input(inp, optical_flow):
@@ -144,7 +148,7 @@ class Generator(nn.Module):
                                                           driving_region_params=driving_region_params,
                                                           source_region_params=source_region_params,
                                                           driving_smpl=driving_smpl, source_smpl=source_smpl,
-                                                            source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr,
+                                                          source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr,
                                                           bg_params=bg_params)
             output_dict["deformed"] = self.deform_input(source_image, motion_params['optical_flow'])
             output_dict["optical_flow"] = motion_params['optical_flow']
@@ -156,7 +160,7 @@ class Generator(nn.Module):
                 output_dict['occlusion_map'] = motion_params['occlusion_map']
         else:
             motion_params = None
-        
+
         if self.mode == 'smplstyle' or self.mode == 'style':
             style = self.style_encoder[0](source_image)
             for i in range(len(self.style_encoder)-1):
@@ -175,7 +179,10 @@ class Generator(nn.Module):
         deformed_image = self.deform_input(source_image, motion_params['optical_flow'])
         if deformed_image.shape[2] != motion_params['occlusion_map'].shape[2] or deformed_image.shape[3] != motion_params['occlusion_map'].shape[3]:
             occlusion_map = F.interpolate(motion_params['occlusion_map'], size=deformed_image.shape[2:], mode='bilinear')
-        out = self.first(torch.cat([deformed_image, occlusion_map], dim=1))
+        # inputs = torch.cat([deformed_image, occlusion_map], dim=1)
+        heatmap = kpt2heatmap(smpl2kpts(driving_smpl.squeeze(-1)), spatial_size=(deformed_image.shape[2], deformed_image.shape[3]),sigma=3.0)
+        inputs = torch.cat([deformed_image, occlusion_map,driving_smpl_rdr,heatmap], dim=1)
+        out = self.first(inputs)
         skips = [out]
         for i in range(len(self.down_blocks)):
             out = self.down_blocks[i](out)
@@ -190,14 +197,14 @@ class Generator(nn.Module):
         # out = torch.cat([out, occlusion_map], dim=1)
 
         out = self.bottleneck(out)
-        
+
         # pose = self.pose_first(driving_smpl_rdr)
         # skips_pose = [pose]
         # for i in range(len(self.pose_blocks)):
         #     pose = self.pose_blocks[i](pose)
         #     skips_pose.append(pose)
         # pose = self.pose_bottleneck(pose)
-        
+
         for i in range(len(self.down_blocks)):
             if self.skips:
                 # out = self.apply_optical(input_skip=skips[-(i + 1)], input_previous=out, motion_params=motion_params)
@@ -207,7 +214,7 @@ class Generator(nn.Module):
                 # out = torch.cat([out, skips[-(i + 1)]], dim=1)
                 out = out + skips[-(i + 1)]
                 # pose = pose + skips_pose[-(i + 1)]
-                
+
             if self.mode == 'smplstyle':
                 out = self.up_blocks[i*2](out, smpl, style)
                 out = self.up_blocks[i*2+1](out, smpl, style)
@@ -219,7 +226,7 @@ class Generator(nn.Module):
                 out = self.up_blocks[i*2+1](out)
                 # pose = self.styled_conv_blocks[i*2](pose, style)
                 # pose = self.styled_conv_blocks[i*2+1](pose, style)
-                
+
         if self.skips:
             # out = self.apply_optical(input_skip=skips[0], input_previous=out, motion_params=motion_params)
             # if out.shape[2] != occlusion_map.shape[2] or out.shape[3] != occlusion_map.shape[3]:
@@ -228,7 +235,7 @@ class Generator(nn.Module):
             # out = torch.cat([out, skips[0]], dim=1)
             out = out + skips[0]
             # pose = pose + skips_pose[0]
-        
+
         if self.mode == 'smplstyle':
             out = self.final(out, smpl, style)
         elif self.mode == 'style':
@@ -244,11 +251,11 @@ class Generator(nn.Module):
         if self.skips:
             # out = self.apply_optical(input_skip=source_image, input_previous=out, motion_params=motion_params)
             out = occlusion_map * deformed_image + (1 - occlusion_map) * out
-        skip = out
-            
-        out = self.sr(out)
-        out = out + skip
-        out = torch.sigmoid(out)
+
+        # skip = out
+        # out = self.sr(out)
+        # out = out + skip
+        # out = torch.sigmoid(out)
 
         output_dict["prediction"] = out
 

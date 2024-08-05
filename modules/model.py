@@ -203,26 +203,26 @@ class GeneratorFullModel(torch.nn.Module):
                     value_total += self.loss_weights['perceptual'][i] * value
             value_total = value_total * (4/len(self.scales))
             loss_values['perceptual'] = value_total
-            
-        
+
+
         # style loss
         if sum(self.loss_weights['style']) != 0:
             value_total = 0
             x_vgg = self.vgg(pyramide_generated['prediction_' + str(scale)])
             y_vgg = self.vgg(pyramide_real['prediction_' + str(scale)])
-            
+
             for i, weight in enumerate(self.loss_weights['style']):
                 value = torch.abs(gram_matrix(x_vgg[i]) - gram_matrix(y_vgg[i].detach())).mean()
                 value_total += weight * value
             loss_values['style'] = value_total
-        
+
 
         # L1 loss
         if self.loss_weights['l1'] != 0:
             value = torch.abs(x['driving'] - generated['prediction']).mean()
             loss_values['l1'] = self.loss_weights['l1'] * value
-        
-        
+
+
         # equivariance loss
         if (self.loss_weights['equivariance_shift'] + self.loss_weights['equivariance_affine']) != 0:
             transform = Transform(x['driving'].shape[0], **self.train_params['transform_params'])
@@ -251,18 +251,19 @@ class GeneratorFullModel(torch.nn.Module):
 
                 value = torch.abs(eye - value).mean()
                 loss_values['equivariance_affine'] = self.loss_weights['equivariance_affine'] * value
-                
+
         # adversarial loss
         if self.loss_weights['adv'] != 0:
             criterion = nn.BCELoss()
 
-            real_edge, gray_image = image_to_edge_tensor(x['driving'], sigma=2.0)
-            fake_pred, fake_edge = self.discriminator(generated['prediction'], gray_image, real_edge, is_real=False)
+            # real_edge, gray_image = image_to_edge_tensor(x['driving'], sigma=2.0)
+            # fake_pred, fake_edge = self.discriminator(generated['prediction'], gray_image, real_edge, is_real=False)
+            fake_pred = self.discriminator(generated['prediction'])
 
             real_target = torch.tensor(1.0).expand_as(fake_pred).to(fake_pred.device)
             loss_adversarial = criterion(fake_pred, real_target)
             loss_values['adv'] = self.loss_weights['adv'] * loss_adversarial
-            
-        
+
+
         return loss_values, generated
 

@@ -95,12 +95,6 @@ class Logger:
         # self.visualize_rec(inp, out)
         if self.epoch == 0:
             self.visualize_rec(inp, out)
-        if self.epoch == 9:
-            self.save_cpk()
-        if self.epoch == 19:
-            self.save_cpk()
-        if self.epoch == 79:
-            self.save_cpk()
         if (self.epoch + 1) % self.checkpoint_freq == 0:
             self.save_cpk()
         if (self.epoch + 1) % 10 == 0:
@@ -207,6 +201,11 @@ class Visualizer:
             transformed_kp = out['transformed_region_params']['shift'].data.cpu().numpy()
             images.append((transformed, transformed_kp))
 
+        if 'gen' in out:
+            gen = out['gen'].data.cpu().numpy()
+            gen = np.transpose(gen, [0, 2, 3, 1])
+            images.append(gen)
+
         # Occlusion map
         if 'occlusion_map' in out:
             occlusion_map = out['occlusion_map'].data.cpu().repeat(1, 3, 1, 1)
@@ -215,15 +214,16 @@ class Visualizer:
             images.append(occlusion_map)
 
         # Heatmaps visualizations
-        if 'heatmap' in out['driving_region_params']:
-            driving_heatmap = F.interpolate(out['driving_region_params']['heatmap'], size=source.shape[1:3])
-            driving_heatmap = np.transpose(driving_heatmap.data.cpu().numpy(), [0, 2, 3, 1])
-            images.append(draw_colored_heatmap(driving_heatmap, self.colormap, self.region_bg_color))
-
         if 'heatmap' in out['source_region_params']:
             source_heatmap = F.interpolate(out['source_region_params']['heatmap'], size=source.shape[1:3])
             source_heatmap = np.transpose(source_heatmap.data.cpu().numpy(), [0, 2, 3, 1])
             images.append(draw_colored_heatmap(source_heatmap, self.colormap, self.region_bg_color))
+
+
+        if 'heatmap' in out['driving_region_params']:
+            driving_heatmap = F.interpolate(out['driving_region_params']['heatmap'], size=source.shape[1:3])
+            driving_heatmap = np.transpose(driving_heatmap.data.cpu().numpy(), [0, 2, 3, 1])
+            images.append(draw_colored_heatmap(driving_heatmap, self.colormap, self.region_bg_color))
 
         # SMPL mask
         if 'smpl_mask' in out:

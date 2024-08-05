@@ -1,4 +1,4 @@
-""" 
+"""
 Tensorflow SMPL implementation as batch.
 Specify joint types:
 'coco': Returns COCO+ 19 joints

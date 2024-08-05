@@ -35,20 +35,20 @@ def image_to_edge_tensor(image_tensor, sigma=2.0):
 
     for i in range(batch_size):
         single_image_tensor = image_tensor[i]
-        
+
         np_image = single_image_tensor.permute(1, 2, 0).cpu().detach().numpy()
         gray_image = rgb2gray(np_image)
-        
+
         edge_tensor = image_to_tensor()(Image.fromarray(canny(gray_image, sigma=sigma)))
-        
+
         gray_image_tensor = image_to_tensor()(Image.fromarray(gray_image))
-        
+
         edges.append(edge_tensor)
         gray_images.append(gray_image_tensor)
-    
+
     edges_tensor = torch.stack(edges).to(image_tensor.device)
     gray_images_tensor = torch.stack(gray_images).to(image_tensor.device)
-    
+
     return edges_tensor, gray_images_tensor
 
 
@@ -103,7 +103,7 @@ def postprocess(x):
 
 
 def extract_patches(x, kernel_size=3, stride=1):
-    
+
     if kernel_size != 1:
         x = nn.ZeroPad2d(1)(x)
     x = x.permute(0, 2, 3, 1)
@@ -112,7 +112,7 @@ def extract_patches(x, kernel_size=3, stride=1):
 
 
 def requires_grad(model, flag=True):
-    
+
     for p in model.parameters():
         p.requires_grad = flag
 
@@ -122,21 +122,38 @@ def sample_data(loader):
     while True:
         for batch in loader:
             yield batch
-            
 
-def discriminator_loss_func(real_pred, fake_pred, real_pred_edge, fake_pred_edge, edge):
+
+# def discriminator_loss_func(real_pred, fake_pred, real_pred_edge, fake_pred_edge, edge):
+
+#     criterion = nn.BCELoss()
+
+#     real_target = torch.tensor(1.0).expand_as(real_pred)
+#     fake_target = torch.tensor(0.0).expand_as(fake_pred)
+#     if torch.cuda.is_available():
+#         real_target = real_target.cuda()
+#         fake_target = fake_target.cuda()
+
+#     loss_adversarial = criterion(real_pred, real_target) + criterion(fake_pred, fake_target) + \
+#                     criterion(real_pred_edge, edge) + criterion(fake_pred_edge, edge)
+
+#     return {
+#         'loss_adversarial': loss_adversarial.mean()
+#     }
+
+
+def discriminator_loss_func(real_pred, fake_pred, weight=1.0):
 
     criterion = nn.BCELoss()
-    
+
     real_target = torch.tensor(1.0).expand_as(real_pred)
     fake_target = torch.tensor(0.0).expand_as(fake_pred)
     if torch.cuda.is_available():
         real_target = real_target.cuda()
         fake_target = fake_target.cuda()
 
-    loss_adversarial = criterion(real_pred, real_target) + criterion(fake_pred, fake_target) + \
-                    criterion(real_pred_edge, edge) + criterion(fake_pred_edge, edge)
+    loss_adversarial = criterion(real_pred, real_target) + criterion(fake_pred, fake_target)
 
     return {
-        'loss_adversarial': loss_adversarial.mean()
+        'loss_adversarial': loss_adversarial.mean() * weight
     }

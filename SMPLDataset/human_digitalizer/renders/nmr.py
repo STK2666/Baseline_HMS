@@ -258,6 +258,21 @@ class BaseSMPLRenderer(nn.Module):
         else:
             return images, textures
 
+    def face_normals(self, vertices, faces):
+        faces = faces.long()
+        v0 = torch.gather(vertices, 1, faces[:, :, [0]].expand(-1, -1, 3))
+        v1 = torch.gather(vertices, 1, faces[:, :, [1]].expand(-1, -1, 3))
+        v2 = torch.gather(vertices, 1, faces[:, :, [2]].expand(-1, -1, 3))
+
+        edge1 = v1 - v0
+        edge2 = v2 - v0
+
+        normals = torch.cross(edge1, edge2, dim=-1)
+        normals = torch.nn.functional.normalize(normals, dim=-1)
+        normals = normals[:, :, None, None, None, :].expand(-1, -1, 3, 3, 3, -1)
+
+        return normals
+
     def render(self, cam, vertices, textures, faces=None, get_fim=False):
         if faces is None:
             bs = cam.shape[0]
@@ -287,13 +302,40 @@ class BaseSMPLRenderer(nn.Module):
         # rasterization
         faces = nr.vertices_to_faces(vertices, faces)
         images = nr.rasterize(faces, textures, self.image_size, self.anti_aliasing,
-                              self.near, self.far, self.rasterizer_eps, self.background_color)
+                              self.near, self.far, self.rasterizer_eps, background_color)
         fim = None
         if get_fim:
             fim = nr.rasterize_face_index_map(faces, image_size=self.image_size, anti_aliasing=False,
                                               near=self.near, far=self.far, eps=self.rasterizer_eps)
 
         return images, fim
+
+    def render_normal_map(self, cam, vertices, faces=None):
+        if faces is None:
+            bs = cam.shape[0]
+            faces = self.smpl_faces.repeat(bs, 1, 1)
+
+        # calculate face normals
+        vertices = vertices.clone()
+        faces = faces.clone()
+        face_normals = self.face_normals(vertices, faces)
+
+        # map normals from [-1, 1] to [0, 1]
+        face_normals = (face_normals + 1) / 2
+
+        # set offset_z for persp proj
+        proj_verts = self.proj_func(vertices, cam)
+        # flipping the y-axis here to make it align with the image coordinate system!
+        proj_verts[:, :, 1] *= -1
+        # calculate the look_at vertices.
+        vertices = nr.look_at(proj_verts, self.eye)
+
+        # rasterization
+        faces = nr.vertices_to_faces(vertices, faces)
+        normal_map = nr.rasterize(faces, face_normals, self.image_size, self.anti_aliasing,
+                                  self.near, self.far, self.rasterizer_eps, (0, 0, 0))
+
+        return normal_map
 
     def render_fim(self, cam, vertices, smpl_faces=True):
         if smpl_faces:

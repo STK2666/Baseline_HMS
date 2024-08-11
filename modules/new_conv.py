@@ -462,3 +462,18 @@ class SMPLStyledConv(nn.Module):
         out = self.activate(out)
 
         return out
+    
+class MyModule(nn.Module):
+    def __init__(self, channel):
+        super(MyModule, self).__init__()
+
+        self.conv = nn.Sequential(
+            nn.Conv2d(channel, channel, kernel_size=1, padding=0, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channel, channel, kernel_size=1, padding=0, bias=True),
+            nn.Sigmoid()
+        )
+        
+    def forward(self, x, heatmap):
+        y = self.conv(heatmap)
+        return x * y

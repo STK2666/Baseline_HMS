@@ -10,6 +10,8 @@ In no event will Snap Inc. be liable for any damages or losses of any kind arisi
 from torch import nn
 import torch.nn.functional as F
 import torch
+import numpy as np
+
 from modules.util import Hourglass, AntiAliasInterpolation2d, make_coordinate_grid, region2gaussian
 from modules.util import to_homogeneous, from_homogeneous
 
@@ -63,6 +65,7 @@ class PixelwiseFlowPredictor(nn.Module):
         self.renderer = SMPLRenderer(map_name="par")
         self.smpl_model = SMPL('./SMPLDataset/checkpoints/smpl_model.pkl').eval()
         self.smpl_model.requires_grad_(False)
+        # self.faces = self.smpl_model.faces.astype(np.int32)
         self.renderer.set_ambient_light()
 
         num_flows = num_regions + 1 if self.flow_mode != 'concat' else num_regions + 2
@@ -139,6 +142,7 @@ class PixelwiseFlowPredictor(nn.Module):
 
         return sparse_motions
 
+
     def create_deformed_source_image(self, source_image, sparse_motions):
         bs, _, h, w = source_image.shape
         source_repeat = source_image.unsqueeze(1).unsqueeze(1).repeat(1, self.num_regions + 1, 1, 1, 1, 1)
@@ -147,7 +151,14 @@ class PixelwiseFlowPredictor(nn.Module):
         sparse_deformed = F.grid_sample(source_repeat, sparse_motions)
         sparse_deformed = sparse_deformed.view((bs, self.num_regions + 1, -1, h, w))
         return sparse_deformed
+    
 
+    def get_normals(self, cams, verts):
+        # get normal map (-1, 1)
+        normal_map = self.renderer.render_normal_map(cams, verts)
+        normal_map = normal_map*2 -1
+        return normal_map
+    
     def get_verts(self, smpl_para, get_landmarks=False):
         cam_nc = 3
         pose_nc = 72
@@ -168,13 +179,17 @@ class PixelwiseFlowPredictor(nn.Module):
     def get_flow(self, source_smpl, driving_smpl):
         cam_from, vert_from = self.get_verts(source_smpl)
         cam_to, vert_to = self.get_verts(driving_smpl)
+        nomal_map_to = self.get_normals(cam_to, vert_to)
+        # print(nomal_map_to.shape, nomal_map_to.min(), nomal_map_to.max())
+        # import cv2
+        # cv2.imwrite("normal_map.png", (nomal_map_to[0].cpu().numpy().transpose(1,2,0)*127.5+127.5).astype(np.uint8))
         f2verts, _, _ = self.renderer.render_fim_wim(cam_from, vert_from)
         f2verts = f2verts[:, :, :, 0:2]
 
         _, step_fim, step_wim = self.renderer.render_fim_wim(cam_to, vert_to)
         T, occlu_map = self.renderer.cal_bc_transform(f2verts, step_fim, step_wim)
 
-        return T, occlu_map
+        return T, occlu_map, nomal_map_to
 
     def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None):
         if self.scale_factor != 1:
@@ -246,7 +261,8 @@ class PixelwiseFlowPredictor(nn.Module):
                 out_dict['combine_mask'] = combine_mask[:, 0:1]
                 out_dict['smpl_mask'] = smpl_mask.squeeze(2)
         else:
-            smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
+            smpl_flow, smpl_mask, normal_map = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
+            out_dict['normal_map'] = normal_map
             smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
             smpl_mask = smpl_mask.unsqueeze(1)
             N,_,_,H,W = sparse_motion.shape

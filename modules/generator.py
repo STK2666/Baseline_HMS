@@ -15,9 +15,12 @@ from modules.util import SMPLStyledResBlock2d, SMPLStyledUpBlock2d, SMPLStyledSa
 from modules.util import StyledResBlock2d, StyledUpBlock2d, StyledSameBlock2d
 from modules.util import kpt2heatmap
 from utils.pose_utils import smpl2kpts
-from modules.new_conv import SMPLStyledConv2d, ModulatedConv2d
+from modules.new_conv import SMPLStyledConv2d, ModulatedConv2d, MyModule
 from modules.pixelwise_flow_predictor import PixelwiseFlowPredictor
+from modules.backbones import Encoder, QKVLinear
 from modules.super_resolution import RCAN
+
+import math
 
 
 class Generator(nn.Module):
@@ -27,7 +30,7 @@ class Generator(nn.Module):
     """
 
     def __init__(self, num_channels, num_regions, block_expansion, max_features, num_down_blocks,
-                 num_bottleneck_blocks, pixelwise_flow_predictor_params=None, skips=False, revert_axis_swap=True,mode='conv_concat'):
+                 num_bottleneck_blocks, pixelwise_flow_predictor_params=None, skips=True, revert_axis_swap=True,mode='conv_concat'):
         super(Generator, self).__init__()
         self.mode = mode.split('_')[0]
         self.num_channels = num_channels
@@ -40,10 +43,11 @@ class Generator(nn.Module):
         else:
             self.pixelwise_flow_predictor = None
 
-        self.first = SameBlock2d(num_channels+23, block_expansion, kernel_size=(7, 7), padding=(3, 3))
-        # self.first = SameBlock2d(num_channels+4, block_expansion, kernel_size=(7, 7), padding=(3, 3))
-        # self.first = SameBlock2d(num_channels+1, block_expansion, kernel_size=(7, 7), padding=(3, 3))
-        self.pose_first = SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))
+        # self.first = SameBlock2d(num_channels+26, block_expansion, kernel_size=(7, 7), padding=(3, 3))
+        # # self.first = SameBlock2d(num_channels+4, block_expansion, kernel_size=(7, 7), padding=(3, 3))
+        # # self.first = SameBlock2d(num_channels+1, block_expansion, kernel_size=(7, 7), padding=(3, 3))
+        # self.pose_first = SameBlock2d(19, block_expansion, kernel_size=(7, 7), padding=(3, 3))
+        # self.normal_first = SameBlock2d(3, block_expansion, kernel_size=(7, 7), padding=(3, 3))
 
         # if self.mode == 'smplstyle' or self.mode == 'style':
         #     style_encoder_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
@@ -52,25 +56,30 @@ class Generator(nn.Module):
         #         out_features = min(max_features, block_expansion * (2 ** (i + 1)))
         #         style_encoder_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
         #     self.style_encoder = nn.ModuleList(style_encoder_blocks)
-        style_encoder_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
-        for i in range(num_down_blocks+3):
-            in_features = min(max_features, block_expansion * (2 ** i))
-            out_features = min(max_features, block_expansion * (2 ** (i + 1)))
-            style_encoder_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
-        self.style_encoder = nn.ModuleList(style_encoder_blocks)
-
-        down_blocks = []
-        # pose_blocks = []
-        for i in range(num_down_blocks):
-            in_features = min(max_features, block_expansion * (2 ** i))
-            out_features = min(max_features, block_expansion * (2 ** (i + 1)))
-            down_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
-            # pose_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
-        self.down_blocks = nn.ModuleList(down_blocks)
-        # self.pose_blocks = nn.ModuleList(pose_blocks)
+        self.encoder = Encoder(in_channels=num_channels+26, block_expansion=block_expansion, max_features=max_features,
+                               num_down_blocks=num_down_blocks, skips=skips)
+        self.pose_encoder = Encoder(in_channels=19, block_expansion=block_expansion, max_features=max_features,
+                                    num_down_blocks=num_down_blocks, skips=skips)
+        self.normal_encoder = Encoder(in_channels=3, block_expansion=block_expansion, max_features=max_features,
+                                    num_down_blocks=num_down_blocks, skips=skips)
+        self.style_encoder = Encoder(in_channels=num_channels, block_expansion=block_expansion, max_features=max_features*2,
+                                        num_down_blocks=num_down_blocks+3, skips=False)
+        # if self.mode == 'smplstyle' or self.mode == 'style':
+        #     self.style_encoder = Encoder(in_channels=num_channels, block_expansion=block_expansion, max_features=max_features,
+        #                                 num_down_blocks=num_down_blocks+3, skips=skips)
+        self.linear_q = QKVLinear(block_expansion, max_features, num_down_blocks)
+        self.linear_k = QKVLinear(block_expansion, max_features, num_down_blocks)
+        self.linear_v = QKVLinear(block_expansion, max_features, num_down_blocks)
+        
+        self.bottleneck = torch.nn.Sequential()
+        in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
+        for i in range(num_bottleneck_blocks):
+            self.bottleneck.add_module('r' + str(i), ResBlock2d(in_features, kernel_size=(3, 3), padding=(1, 1)))
 
         up_blocks = []
         # styled_conv_blocks = []
+        fusion_blocks = []
+        mod_blocks = []
         for i in range(num_down_blocks):
             in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
             out_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i - 1)))
@@ -81,20 +90,20 @@ class Generator(nn.Module):
                 up_blocks.append(StyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
                 up_blocks.append(StyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
             else:
+                mod_blocks.append(MyModule(in_features))
+                fusion_blocks.append(ModulatedConv2d(in_features, in_features, kernel_size=3, style_dim=max_features*2))
                 up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
                 # up_blocks.append(UpBlock2d(in_features*2, out_features, kernel_size=(3, 3), padding=(1, 1)))
                 up_blocks.append(SameBlock2d(out_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
                 # styled_conv_blocks.append(StyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
                 # styled_conv_blocks.append(StyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
         self.up_blocks = nn.ModuleList(up_blocks)
+        self.fusion_blocks = nn.ModuleList(fusion_blocks)
+        self.mod_blocks = nn.ModuleList(mod_blocks)
         # self.styled_conv_blocks = nn.ModuleList(styled_conv_blocks)
 
 
-        self.bottleneck = torch.nn.Sequential()
-        in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
-        for i in range(num_bottleneck_blocks):
-            self.bottleneck.add_module('r' + str(i), ResBlock2d(in_features, kernel_size=(3, 3), padding=(1, 1)))
-
+        
         # self.pose_bottleneck = torch.nn.Sequential()
         # in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
         # for i in range(num_bottleneck_blocks):
@@ -119,6 +128,12 @@ class Generator(nn.Module):
             optical_flow = F.interpolate(optical_flow, size=(h, w), mode='bilinear')
             optical_flow = optical_flow.permute(0, 2, 3, 1)
         return F.grid_sample(inp, optical_flow)
+
+    def dot_product_attention(self, query, key, value):
+        d_k = query.size(-1)
+        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
+        p_attn = F.softmax(scores, dim = -1)
+        return torch.matmul(p_attn, value)
 
     def apply_optical(self, input_previous=None, input_skip=None, motion_params=None):
         if motion_params is not None:
@@ -150,6 +165,7 @@ class Generator(nn.Module):
                                                           driving_smpl=driving_smpl, source_smpl=source_smpl,
                                                           source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr,
                                                           bg_params=bg_params)
+            normal_map = motion_params['normal_map']
             output_dict["deformed"] = self.deform_input(source_image, motion_params['optical_flow'])
             output_dict["optical_flow"] = motion_params['optical_flow']
             if 'combine_mask' in motion_params:
@@ -174,44 +190,33 @@ class Generator(nn.Module):
         # style = self.style_encoder[0](source_image)
         # for i in range(len(self.style_encoder)-1):
         #     style = self.style_encoder[i+1](style)
-        # style = F.adaptive_avg_pool2d(style, (1, 1)).view(style.shape[0], -1)
+        style = self.style_encoder(source_image)
+        style = F.adaptive_avg_pool2d(style, (1, 1)).view(style.shape[0], -1)
 
         deformed_image = self.deform_input(source_image, motion_params['optical_flow'])
         if deformed_image.shape[2] != motion_params['occlusion_map'].shape[2] or deformed_image.shape[3] != motion_params['occlusion_map'].shape[3]:
             occlusion_map = F.interpolate(motion_params['occlusion_map'], size=deformed_image.shape[2:], mode='bilinear')
         # inputs = torch.cat([deformed_image, occlusion_map], dim=1)
         heatmap = kpt2heatmap(smpl2kpts(driving_smpl.squeeze(-1)), spatial_size=(deformed_image.shape[2], deformed_image.shape[3]),sigma=3.0)
-        inputs = torch.cat([deformed_image, occlusion_map,driving_smpl_rdr,heatmap], dim=1)
-        out = self.first(inputs)
-        skips = [out]
-        for i in range(len(self.down_blocks)):
-            out = self.down_blocks[i](out)
-            skips.append(out)
-
-        output_dict["bottle_neck_feat"] = out
-
-        # out = self.apply_optical(input_previous=None, input_skip=out, motion_params=motion_params)
-        # occlusion_map = motion_params['occlusion_map'] if 'occlusion_map' in motion_params else None
-        # if out.shape[2] != occlusion_map.shape[2] or out.shape[3] != occlusion_map.shape[3]:
-        #     occlusion_map = F.interpolate(occlusion_map, size=out.shape[2:], mode='bilinear')
-        # out = torch.cat([out, occlusion_map], dim=1)
+        inputs = torch.cat([deformed_image, occlusion_map,driving_smpl_rdr,heatmap,normal_map], dim=1)
+        # out = self.first(inputs)
+        # skips = [out]
+        # for i in range(len(self.down_blocks)):
+        #     out = self.down_blocks[i](out)
+        #     skips.append(out)
+        skips = self.encoder(inputs)
+        out = skips[-1]
+        
+        pose = self.pose_encoder(heatmap)
+        
+        normal = self.normal_encoder(normal_map)
 
         out = self.bottleneck(out)
+        
+        output_dict["bottle_neck_feat"] = out
 
-        # pose = self.pose_first(driving_smpl_rdr)
-        # skips_pose = [pose]
-        # for i in range(len(self.pose_blocks)):
-        #     pose = self.pose_blocks[i](pose)
-        #     skips_pose.append(pose)
-        # pose = self.pose_bottleneck(pose)
-
-        for i in range(len(self.down_blocks)):
+        for i in range(len(self.fusion_blocks)):
             if self.skips:
-                # out = self.apply_optical(input_skip=skips[-(i + 1)], input_previous=out, motion_params=motion_params)
-                # if out.shape[2] != occlusion_map.shape[2] or out.shape[3] != occlusion_map.shape[3]:
-                #     occlusion_map = F.interpolate(occlusion_map, size=out.shape[2:], mode='bilinear')
-                # out = torch.cat([out, occlusion_map], dim=1)
-                # out = torch.cat([out, skips[-(i + 1)]], dim=1)
                 out = out + skips[-(i + 1)]
                 # pose = pose + skips_pose[-(i + 1)]
 
@@ -222,8 +227,16 @@ class Generator(nn.Module):
                 out = self.up_blocks[i*2](out, style)
                 out = self.up_blocks[i*2+1](out, style)
             else:
+                fusion = self.fusion_blocks[i](normal[-(i+1)], style)
+                mod_out = self.mod_blocks[i](out, pose[-(i+1)])
+                q = self.linear_q.blocks[i](fusion)
+                k = self.linear_k.blocks[i](mod_out)
+                v = self.linear_k.blocks[i](mod_out)
+                res = self.dot_product_attention(q, k, v)
+                out = out + res
                 out = self.up_blocks[i*2](out)
                 out = self.up_blocks[i*2+1](out)
+                # res = self.mod_blocks[i](out, )
                 # pose = self.styled_conv_blocks[i*2](pose, style)
                 # pose = self.styled_conv_blocks[i*2+1](pose, style)
 

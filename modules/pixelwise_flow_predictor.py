@@ -179,7 +179,8 @@ class PixelwiseFlowPredictor(nn.Module):
     def get_flow(self, source_smpl, driving_smpl):
         cam_from, vert_from = self.get_verts(source_smpl)
         cam_to, vert_to = self.get_verts(driving_smpl)
-        nomal_map_to = self.get_normals(cam_to, vert_to)
+        normal_map_from = self.get_normals(cam_from, vert_from)
+        normal_map_to = self.get_normals(cam_to, vert_to)
         # print(nomal_map_to.shape, nomal_map_to.min(), nomal_map_to.max())
         # import cv2
         # cv2.imwrite("normal_map.png", (nomal_map_to[0].cpu().numpy().transpose(1,2,0)*127.5+127.5).astype(np.uint8))
@@ -189,44 +190,44 @@ class PixelwiseFlowPredictor(nn.Module):
         _, step_fim, step_wim = self.renderer.render_fim_wim(cam_to, vert_to)
         T, occlu_map = self.renderer.cal_bc_transform(f2verts, step_fim, step_wim)
 
-        return T, occlu_map, nomal_map_to
+        return T, occlu_map, normal_map_from, normal_map_to
 
     def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None):
-        if self.scale_factor != 1:
-            source_image = self.down(source_image)
-            if self.smpl_rdr_input or self.unsupervised_flow:
-                source_smpl_rdr = self.down(source_smpl_rdr)
-                driving_smpl_rdr = self.down(driving_smpl_rdr)
+        # if self.scale_factor != 1:
+        #     source_image = self.down(source_image)
+        #     if self.smpl_rdr_input or self.unsupervised_flow:
+        #         source_smpl_rdr = self.down(source_smpl_rdr)
+        #         driving_smpl_rdr = self.down(driving_smpl_rdr)
 
-        bs, _, h, w = source_image.shape
+        # bs, _, h, w = source_image.shape
 
-        out_dict = dict()
-        heatmap_representation = self.create_heatmap_representations(source_image, driving_region_params,
-                                                                     source_region_params)
-        sparse_motion = self.create_sparse_motions(source_image, driving_region_params,
-                                                   source_region_params, bg_params=bg_params)
-        deformed_source = self.create_deformed_source_image(source_image, sparse_motion)
-        sparse_motion = sparse_motion.permute(0, 1, 4, 2, 3)
+        # out_dict = dict()
+        # heatmap_representation = self.create_heatmap_representations(source_image, driving_region_params,
+        #                                                              source_region_params)
+        # sparse_motion = self.create_sparse_motions(source_image, driving_region_params,
+        #                                            source_region_params, bg_params=bg_params)
+        # deformed_source = self.create_deformed_source_image(source_image, sparse_motion)
+        # sparse_motion = sparse_motion.permute(0, 1, 4, 2, 3)
         
-        if self.use_deformed_source:
-            predictor_input = torch.cat([heatmap_representation, deformed_source], dim=2) # region_heatmaps and deformed_source_features
-        else:
-            predictor_input = heatmap_representation
-        predictor_input = predictor_input.view(bs, -1, h, w)
-        if self.smpl_rdr_input:
-            predictor_input = torch.cat([predictor_input, source_smpl_rdr, driving_smpl_rdr], dim=1)
-        prediction = self.hourglass(predictor_input)
+        # if self.use_deformed_source:
+        #     predictor_input = torch.cat([heatmap_representation, deformed_source], dim=2) # region_heatmaps and deformed_source_features
+        # else:
+        #     predictor_input = heatmap_representation
+        # predictor_input = predictor_input.view(bs, -1, h, w)
+        # if self.smpl_rdr_input:
+        #     predictor_input = torch.cat([predictor_input, source_smpl_rdr, driving_smpl_rdr], dim=1)
+        # prediction = self.hourglass(predictor_input)
 
 
-        driving_smpl = driving_smpl.squeeze(-1)
-        source_smpl = source_smpl.squeeze(-1)
-        smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
+        # driving_smpl = driving_smpl.squeeze(-1)
+        # source_smpl = source_smpl.squeeze(-1)
+        # smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
 
 
-        if self.conv_mode == 'smplstyle':
-            mask = self.mask(prediction, smpl)
-        else:
-            mask = self.mask(prediction)
+        # if self.conv_mode == 'smplstyle':
+        #     mask = self.mask(prediction, smpl)
+        # else:
+        #     mask = self.mask(prediction)
         
         if self.flow_mode != 'vsbmp' and self.flow_mode != 'concat':
             mask = F.softmax(mask, dim=1)
@@ -261,8 +262,43 @@ class PixelwiseFlowPredictor(nn.Module):
                 out_dict['combine_mask'] = combine_mask[:, 0:1]
                 out_dict['smpl_mask'] = smpl_mask.squeeze(2)
         else:
-            smpl_flow, smpl_mask, normal_map = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
-            out_dict['normal_map'] = normal_map
+            out_dict = dict()
+            driving_smpl = driving_smpl.squeeze(-1)
+            source_smpl = source_smpl.squeeze(-1)
+            smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
+            smpl_flow, smpl_mask, normal_map_from, normal_map_to = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
+            
+            if self.scale_factor != 1:
+                source_image = self.down(source_image)
+                if self.smpl_rdr_input or self.unsupervised_flow:
+                    normal_map_from = self.down(normal_map_from)
+                    normal_map_to = self.down(normal_map_to)
+
+            bs, _, h, w = source_image.shape
+
+            heatmap_representation = self.create_heatmap_representations(source_image, driving_region_params,
+                                                                     source_region_params)
+            sparse_motion = self.create_sparse_motions(source_image, driving_region_params,
+                                                       source_region_params, bg_params=bg_params)
+            deformed_source = self.create_deformed_source_image(source_image, sparse_motion)
+            sparse_motion = sparse_motion.permute(0, 1, 4, 2, 3)
+        
+            if self.use_deformed_source:
+                predictor_input = torch.cat([heatmap_representation, deformed_source], dim=2) # region_heatmaps and deformed_source_features
+            else:
+                predictor_input = heatmap_representation
+            predictor_input = predictor_input.view(bs, -1, h, w)
+            if self.smpl_rdr_input:
+                predictor_input = torch.cat([predictor_input, source_smpl_rdr, driving_smpl_rdr], dim=1)
+            prediction = self.hourglass(predictor_input)
+
+
+            if self.conv_mode == 'smplstyle':
+                mask = self.mask(prediction, smpl)
+            else:
+                mask = self.mask(prediction)
+            
+            out_dict['normal_map'] = normal_map_to
             smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
             smpl_mask = smpl_mask.unsqueeze(1)
             N,_,_,H,W = sparse_motion.shape

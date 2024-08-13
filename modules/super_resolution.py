@@ -1,20 +1,22 @@
 import torch.nn as nn
 
 class RCAN(nn.Module):
-    def __init__(self, scale_factor=1, num_channels=3, num_feats=64, num_blocks=1, num_groups=1):
+    def __init__(self, scale_factor=1, num_channels=3, out_channels=None, num_feats=64, num_blocks=1, num_groups=1):
         super(RCAN, self).__init__()
         self.scale_factor = scale_factor
-        
+        if out_channels is None:
+            out_channels = num_channels
+
         self.head = nn.Conv2d(num_channels, num_feats, kernel_size=3, padding=1)
-        
+
         self.body = RCABlock(num_feats)
-        
+
         self.tail = nn.Sequential(
             # nn.Conv2d(num_feats, num_feats * scale_factor ** 2, kernel_size=3, padding=1),
             # nn.PixelShuffle(scale_factor),
-            nn.Conv2d(num_feats, num_channels, kernel_size=3, padding=1)
+            nn.Conv2d(num_feats, out_channels, kernel_size=3, padding=1)
         )
-        
+
     def forward(self, x):
         x = self.head(x)
         x = self.body(x)
@@ -30,7 +32,7 @@ class RCABlock(nn.Module):
             nn.Conv2d(num_feats, num_feats, kernel_size=3, padding=1)
         )
         self.ca = CALayer(num_feats)
-        
+
     def forward(self, x):
         res = self.block(x)
         res = self.ca(res)
@@ -46,7 +48,7 @@ class CALayer(nn.Module):
             nn.Conv2d(channel, channel, kernel_size=1, padding=0, bias=True),
             nn.Sigmoid()
         )
-        
+
     def forward(self, x):
         y = self.avg_pool(x)
         y = self.fc(y)

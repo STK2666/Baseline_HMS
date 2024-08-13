@@ -180,10 +180,10 @@ class GeneratorFullModel(torch.nn.Module):
         source_region_params = self.region_predictor(x['source_rdr'], x['source_smpl'])
         driving_region_params = self.region_predictor(x['driving_rdr'], x['driving_smpl'])
 
-        bg_params = self.bg_predictor(x['source'], x['source_rdr'], x['driving_rdr'])
         generated = self.generator(x['source'], source_region_params=source_region_params,
-                                   driving_region_params=driving_region_params, driving_smpl=x['driving_smpl'], source_smpl=x['source_smpl'], bg_params=bg_params,
+                                   driving_region_params=driving_region_params, driving_smpl=x['driving_smpl'], source_smpl=x['source_smpl'], bg=self.bg_predictor,
                                    source_smpl_rdr=x['source_rdr'], driving_smpl_rdr=x['driving_rdr'])
+        # bg_params = self.bg_predictor(x['source'], normal_map_from, normal_map_to)
         generated.update({'source_region_params': source_region_params, 'driving_region_params': driving_region_params})
 
         loss_values = {}

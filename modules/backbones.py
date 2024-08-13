@@ -44,3 +44,14 @@ class QKVLinear(nn.Module):
         for i in range(len(self.blocks)):
             out_list.append(self.blocks[i](x_list[i]))
         return out_list
+
+
+class StructBlock(nn.Module):
+    def __init__(self, in_features, out_features, kernel_size=(1,1), padding=(0,0)):
+        super(StructBlock, self).__init__()
+        # print(in_features, out_features, kernel_size, padding)
+        self.weight = SameBlock2d(in_features, out_features, kernel_size=kernel_size, padding=padding)
+        self.bias = SameBlock2d(in_features, out_features, kernel_size=kernel_size, padding=padding)
+
+    def forward(self, x, struct):
+        return self.weight(struct) * x + self.bias(struct)

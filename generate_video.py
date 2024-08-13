@@ -34,7 +34,9 @@ def generate_video(config, inpainting_network, bg_predictor, dense_motion_networ
 
             # log_dir = "/disk1/tongkai/dataset/fashion/"
             image_folder_path = os.path.join(log_dir, run_name, 'images')
+            os.makedirs(image_folder_path, exist_ok=True)
             video_path = os.path.join(log_dir, run_name, 'video')
+            os.makedirs(video_path, exist_ok=True)
             generate_video_path = os.path.join(video_path, x['name'][0]+'.mp4')
             writer = imageio.get_writer(generate_video_path, fps=30, format='mp4')
 
@@ -62,15 +64,16 @@ def generate_video(config, inpainting_network, bg_predictor, dense_motion_networ
                     source_smpl = source_smpl.cuda()
                     driving_smpl = driving_smpl.cuda()
 
-                bg_params = None
-                if bg_predictor:
-                    bg_params = bg_predictor(source, source_rdr, driving_rdr)
+                # bg_params = None
+                # if bg_predictor:
+                #     bg_params = bg_predictor(source, source_rdr, driving_rdr)
 
                 source_region_params = dense_motion_network(source_rdr, source_smpl)
                 driving_region_params = dense_motion_network(driving_rdr, driving_smpl)
 
                 out = inpainting_network(source, source_region_params=source_region_params,
-                           driving_region_params=driving_region_params, bg_params=bg_params,
+                           driving_region_params=driving_region_params, bg=bg_predictor,
+                        #    driving_region_params=driving_region_params, bg_params=bg_params,
                            driving_smpl=driving_smpl, source_smpl=source_smpl,
                            driving_smpl_rdr=driving_rdr, source_smpl_rdr=source_rdr)
                 prediction = out['prediction'].data.cpu().numpy()

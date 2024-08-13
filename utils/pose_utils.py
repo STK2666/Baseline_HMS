@@ -30,7 +30,7 @@ def orthographic_proj_withz_idrot(X, cam, offset_z=0.):
 
 
 def smpl2kpts(smpl_params, resize_param=None, org_size=None, affine=None):
-    smpl_model = SMPL('/disk1/tongkai/Baseline_HMS/SMPLDataset/checkpoints/smpl_model.pkl').eval().to(smpl_params.device)
+    smpl_model = SMPL('/ssd5/tongkai/Baseline_HMS/SMPLDataset/checkpoints/smpl_model.pkl').eval().to(smpl_params.device)
     smpl_model.requires_grad_(False)
     cam = smpl_params[:,0:3].contiguous()
     pose_theta = smpl_params[:,3:75].contiguous()

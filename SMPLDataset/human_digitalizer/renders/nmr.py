@@ -268,6 +268,8 @@ class BaseSMPLRenderer(nn.Module):
         edge2 = v2 - v0
 
         normals = torch.cross(edge1, edge2, dim=-1)
+        normals[:,:,1] = -normals[:,:,1]
+        normals[:,:,2] = -normals[:,:,2]
         normals = torch.nn.functional.normalize(normals, dim=-1)
         normals = normals[:, :, None, None, None, :].expand(-1, -1, 3, 3, 3, -1)
 
@@ -302,7 +304,7 @@ class BaseSMPLRenderer(nn.Module):
         # rasterization
         faces = nr.vertices_to_faces(vertices, faces)
         images = nr.rasterize(faces, textures, self.image_size, self.anti_aliasing,
-                              self.near, self.far, self.rasterizer_eps, background_color)
+                              self.near, self.far, self.rasterizer_eps, self.background_color)
         fim = None
         if get_fim:
             fim = nr.rasterize_face_index_map(faces, image_size=self.image_size, anti_aliasing=False,
@@ -336,6 +338,29 @@ class BaseSMPLRenderer(nn.Module):
                                   self.near, self.far, self.rasterizer_eps, (0, 0, 0))
 
         return normal_map
+
+    def render_depth(self, cam, vertices):
+        bs = cam.shape[0]
+        faces = self.smpl_faces.repeat(bs, 1, 1)
+        # set offset_z for persp proj
+        proj_verts = self.proj_func(vertices, cam)
+        # flipping the y-axis here to make it align with the image coordinate system!
+        proj_verts[:, :, 1] *= -1
+        vertices = nr.look_at(proj_verts, self.eye)
+
+        # rasterization
+        faces = nr.vertices_to_faces(vertices, faces)
+        depth = nr.rasterize_depth(faces, self.image_size, self.anti_aliasing)
+        fg_mask = depth < 4.0
+        depth = 100 - depth
+
+        fg = depth[fg_mask]
+        fg_min = fg.min()
+        fg_max = fg.max()
+        depth = torch.zeros_like(depth)
+        depth[fg_mask] = (fg - fg_min) / (fg_max - fg_min) / 2 + 0.5
+
+        return depth
 
     def render_fim(self, cam, vertices, smpl_faces=True):
         if smpl_faces:
@@ -398,19 +423,6 @@ class BaseSMPLRenderer(nn.Module):
         fim, wim = nr.rasterize_face_index_map_and_weight_map(f_img2uvs, self.image_size, False)
 
         return fim, wim
-
-    def render_depth(self, cam, vertices):
-        bs = cam.shape[0]
-        faces = self.faces.repeat(bs, 1, 1)
-        # set offset_z for persp proj
-        proj_verts = self.proj_func(vertices, cam)
-        # flipping the y-axis here to make it align with the image coordinate system!
-        proj_verts[:, :, 1] *= -1
-
-        # rasterization
-        faces = self.vertices_to_faces(proj_verts, faces)
-        images = nr.rasterize_depth(faces, self.image_size, self.anti_aliasing)
-        return images
 
     def render_silhouettes(self, cam, vertices, faces=None):
         if faces is None:

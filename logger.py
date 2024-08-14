@@ -206,6 +206,11 @@ class Visualizer:
             gen = np.transpose(gen, [0, 2, 3, 1])
             images.append(gen)
 
+        if 'smpl_warped' in out:
+            smpl_warped = out['smpl_warped'].data.cpu().numpy()
+            smpl_warped = np.transpose(smpl_warped, [0, 2, 3, 1])
+            images.append(smpl_warped)
+
         # Occlusion map
         if 'occlusion_map' in out:
             occlusion_map = out['occlusion_map'].data.cpu().repeat(1, 3, 1, 1)

@@ -43,14 +43,8 @@ class Generator(nn.Module):
         else:
             self.pixelwise_flow_predictor = None
 
-        self.encoder = Encoder(in_channels=num_channels+1, block_expansion=block_expansion, max_features=max_features,
+        self.encoder = Encoder(in_channels=num_channels+24, block_expansion=block_expansion, max_features=max_features,
                                num_down_blocks=num_down_blocks, skips=skips)
-        self.struct_encoder = Encoder(in_channels=23, block_expansion=block_expansion, max_features=max_features,
-                                 num_down_blocks=num_down_blocks, skips=skips)
-
-        if self.mode == 'smplstyle' or self.mode == 'style':
-            self.style_encoder = Encoder(in_channels=num_channels, block_expansion=block_expansion, max_features=max_features,
-                                        num_down_blocks=num_down_blocks+3, skips=skips)
 
         self.bottleneck = torch.nn.Sequential()
         in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
@@ -58,31 +52,15 @@ class Generator(nn.Module):
             self.bottleneck.add_module('r' + str(i), ResBlock2d(in_features, kernel_size=(3, 3), padding=(1, 1)))
 
         up_blocks = []
-        st_blocks = []
         for i in range(num_down_blocks):
             in_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i)))
             out_features = min(max_features, block_expansion * (2 ** (num_down_blocks - i - 1)))
-            if self.mode == 'smplstyle':
-                up_blocks.append(SMPLStyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
-                up_blocks.append(SMPLStyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
-            elif self.mode == 'style':
-                up_blocks.append(StyledUpBlock2d(in_features, out_features, kernel_size=3, style_dim=max_features))
-                up_blocks.append(StyledSameBlock2d(out_features, out_features, kernel_size=3, style_dim=max_features))
-            else:
-                st_blocks.append(StructBlock(in_features=in_features, out_features=in_features, kernel_size=(1, 1), padding=(0, 0)))
-                up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
-                up_blocks.append(SameBlock2d(out_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+            up_blocks.append(UpBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
+            up_blocks.append(SameBlock2d(out_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
         self.up_blocks = nn.ModuleList(up_blocks)
-        self.st_blocks = nn.ModuleList(st_blocks)
 
-        if self.mode == 'smplstyle':
-            self.final = SMPLStyledConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
-        elif self.mode == 'style':
-            self.final = ModulatedConv2d(block_expansion, num_channels, kernel_size=7, style_dim=max_features)
-        else:
-            self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
+        self.final = nn.Conv2d(block_expansion, num_channels, kernel_size=(7, 7), padding=(3, 3))
 
-        self.sr = RCAN(num_channels=num_channels+23, out_channels=num_channels, num_feats=64, num_blocks=1, num_groups=1)
 
     @staticmethod
     def deform_input(inp, optical_flow):
@@ -128,7 +106,6 @@ class Generator(nn.Module):
                                                           driving_region_params=driving_region_params,
                                                           source_region_params=source_region_params,
                                                           driving_smpl=driving_smpl, source_smpl=source_smpl,
-                                                        #   source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr,
                                                           bg=bg)
             normal_map = motion_params['normal_map']
             output_dict['normal_map_from'] = motion_params['normal_map_from']
@@ -137,6 +114,7 @@ class Generator(nn.Module):
             output_dict['depth_map'] = motion_params['depth_map']
             output_dict["deformed"] = self.deform_input(source_image, motion_params['optical_flow'])
             output_dict["optical_flow"] = motion_params['optical_flow']
+            output_dict['smpl_warped'] = motion_params['smpl_warped']
             if 'combine_mask' in motion_params:
                 output_dict['combine_mask'] = motion_params['combine_mask']
             if 'smpl_mask' in motion_params:
@@ -156,25 +134,17 @@ class Generator(nn.Module):
             driving_smpl = driving_smpl.squeeze(-1)
             smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
 
-        # style = self.style_encoder[0](source_image)
-        # for i in range(len(self.style_encoder)-1):
-        #     style = self.style_encoder[i+1](style)
-        # style = self.style_encoder(source_image)
-        # style = F.adaptive_avg_pool2d(style, (1, 1)).view(style.shape[0], -1)
-
         deformed_image = self.deform_input(source_image, motion_params['optical_flow'])
         if deformed_image.shape[2] != motion_params['occlusion_map'].shape[2] or deformed_image.shape[3] != motion_params['occlusion_map'].shape[3]:
             occlusion_map = F.interpolate(motion_params['occlusion_map'], size=deformed_image.shape[2:], mode='bilinear')
 
-        heatmap = kpt2heatmap(smpl2kpts(driving_smpl.squeeze(-1)), spatial_size=(deformed_image.shape[2], deformed_image.shape[3]),sigma=3.0)
-        depth_map = motion_params['depth_map'].unsqueeze(1)
-        inputs = torch.cat([deformed_image, occlusion_map], dim=1)
+        # heatmap = kpt2heatmap(smpl2kpts(driving_smpl.squeeze(-1)), spatial_size=(deformed_image.shape[2], deformed_image.shape[3]),sigma=3.0)
+        heatmap = motion_params['heatmap']
+        depth_map = motion_params['depth_map']
+        inputs = torch.cat([deformed_image, occlusion_map, heatmap, normal_map, depth_map], dim=1)
 
         skips = self.encoder(inputs)
         out = skips[-1]
-
-        struct_inputs = torch.cat([heatmap, normal_map, depth_map], dim=1)
-        struct = self.struct_encoder(struct_inputs)
 
         out = self.bottleneck(out)
 
@@ -191,9 +161,6 @@ class Generator(nn.Module):
                 out = self.up_blocks[i*2](out, style)
                 out = self.up_blocks[i*2+1](out, style)
             else:
-
-                res = self.st_blocks[i](out, struct[-(i+1)])
-                out = out + res
                 out = self.up_blocks[i*2](out)
                 out = self.up_blocks[i*2+1](out)
 
@@ -212,12 +179,6 @@ class Generator(nn.Module):
 
         if self.skips:
             out = occlusion_map * deformed_image + (1 - occlusion_map) * out
-
-        res = self.sr(torch.cat([out, heatmap, normal_map, depth_map], dim=1))
-        # res = self.toRGB(res)
-        out = out + res
-        out = torch.sigmoid(out)
-
         output_dict["prediction"] = out
 
         return output_dict

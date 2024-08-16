@@ -230,20 +230,6 @@ class Visualizer:
             driving_heatmap = np.transpose(driving_heatmap.data.cpu().numpy(), [0, 2, 3, 1])
             images.append(draw_colored_heatmap(driving_heatmap, self.colormap, self.region_bg_color))
 
-        # SMPL mask
-        if 'smpl_mask' in out:
-            smpl_mask = out['smpl_mask'].data.cpu().repeat(1, 3, 1, 1)
-            smpl_mask = F.interpolate(smpl_mask, size=source.shape[1:3]).numpy()
-            smpl_mask = np.transpose(smpl_mask, [0, 2, 3, 1])
-            images.append(smpl_mask)
-
-        # Combine mask
-        if 'combine_mask' in out:
-            combine_mask = out['combine_mask'].data.cpu().repeat(1, 3, 1, 1)
-            combine_mask = F.interpolate(combine_mask, size=source.shape[1:3]).numpy()
-            combine_mask = np.transpose(combine_mask, [0, 2, 3, 1])
-            images.append(combine_mask)
-
         image = self.create_image_grid(*images)
         image = (255 * image).astype(np.uint8)
         return image

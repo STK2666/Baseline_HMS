@@ -134,7 +134,6 @@ class PixelwiseFlowPredictor(nn.Module):
 
         return sparse_motions
 
-
     def create_deformed_source_image(self, source_image, sparse_motions):
         bs, _, h, w = source_image.shape
         source_repeat = source_image.unsqueeze(1).unsqueeze(1).repeat(1, self.num_regions + 1, 1, 1, 1, 1)
@@ -171,10 +170,6 @@ class PixelwiseFlowPredictor(nn.Module):
     def get_flow(self, source_smpl, driving_smpl):
         cam_from, vert_from = self.get_verts(source_smpl)
         cam_to, vert_to = self.get_verts(driving_smpl)
-        normal_map_from = self.get_normals(cam_from, vert_from)
-        normal_map_to = self.get_normals(cam_to, vert_to)
-        depth_to = self.renderer.render_depth(cam_to, vert_to)
-        depth_from = self.renderer.render_depth(cam_from, vert_from)
 
         f2verts, _, _ = self.renderer.render_fim_wim(cam_from, vert_from)
         f2verts = f2verts[:, :, :, 0:2]
@@ -182,57 +177,48 @@ class PixelwiseFlowPredictor(nn.Module):
         _, step_fim, step_wim = self.renderer.render_fim_wim(cam_to, vert_to)
         T, occlu_map = self.renderer.cal_bc_transform(f2verts, step_fim, step_wim)
 
-        return T, occlu_map, normal_map_from, normal_map_to, depth_to, depth_from
+        return T, occlu_map
 
-    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg=None, source_smpl_rdr=None, driving_smpl_rdr=None):
+    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None, source_depth=None, driving_depth=None):
         out_dict = dict()
         driving_smpl = driving_smpl.squeeze(-1)
         source_smpl = source_smpl.squeeze(-1)
 
-        smpl_flow, smpl_mask, normal_map_from, normal_map_to, depth_to, depth_from = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
-        normal_map = normal_map_to
-        depth_to = depth_to.unsqueeze(1)
-        depth_from = depth_from.unsqueeze(1)
+        smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
 
-        out_dict['normal_map_from'] = normal_map_from
-        out_dict['normal_map_to'] = normal_map_to
-        out_dict['normal_map'] = normal_map
-        out_dict['depth_map'] = depth_to
-
-        smpl_flow = smpl_flow
-        # .unsqueeze(-1).permute(0, 4, 3, 1, 2)
         smpl_mask = smpl_mask.unsqueeze(1)
         smpl_warped = F.grid_sample(source_image, smpl_flow) * smpl_mask
         out_dict['smpl_warped'] = smpl_warped
 
-        heatmap_to = kpt2heatmap(smpl2kpts(driving_smpl), spatial_size=(source_image.shape[2], source_image.shape[3]),sigma=3.0)
-        heatmap_from = kpt2heatmap(smpl2kpts(source_smpl), spatial_size=(source_image.shape[2], source_image.shape[3]),sigma=3.0)
-        out_dict['heatmap'] = heatmap_to
-
-        bg_params = bg(source_image, normal_map_from, normal_map_to)
+        driving_heatmap = kpt2heatmap(smpl2kpts(driving_smpl), spatial_size=(source_image.shape[2], source_image.shape[3]),sigma=3.0)
+        source_heatmap = kpt2heatmap(smpl2kpts(source_smpl), spatial_size=(source_image.shape[2], source_image.shape[3]),sigma=3.0)
+        out_dict['heatmap'] = driving_heatmap
 
         if self.scale_factor != 1:
             source_image = self.down(source_image)
             smpl_warped = self.down(smpl_warped)
-            heatmap_to = F.interpolate(heatmap_to, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
-            heatmap_from = F.interpolate(heatmap_from, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
-            depth_to = F.interpolate(depth_to, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
-            depth_from = F.interpolate(depth_from, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
-            normal_map_from = F.interpolate(normal_map_from, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
-            normal_map_to = F.interpolate(normal_map_to, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
+
+            driving_heatmap = F.interpolate(driving_heatmap, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
+            source_heatmap = F.interpolate(source_heatmap, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
+
+            drving_depth = F.interpolate(drving_depth, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
+            source_depth = F.interpolate(source_depth, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
+
+            source_smpl_rdr = F.interpolate(source_smpl_rdr, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
+            driving_smpl_rdr = F.interpolate(driving_smpl_rdr, size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear')
+
             smpl_flow = F.interpolate(smpl_flow.permute(0, 3, 1, 2), size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear').permute(0, 2, 3, 1)
 
-
         bs, _, h, w = source_image.shape
-        heatmap_representation = self.create_heatmap_representations(source_image, driving_region_params,
-                                                                 source_region_params)
-        delta_depth = depth_to - depth_from
-        delta_heatmap = heatmap_to - heatmap_from
-        delta_normal = normal_map_to - normal_map_from
+        heatmap_representation = self.create_heatmap_representations(source_image, driving_region_params, source_region_params)
 
-        sparse_motion = self.create_sparse_motions(source_image, driving_region_params,
-                                                   source_region_params, bg_params=bg_params)
+        delta_depth = drving_depth - source_depth
+        delta_heatmap = driving_heatmap - source_heatmap
+        delta_normal = driving_smpl_rdr - source_smpl_rdr
+
+        sparse_motion = self.create_sparse_motions(source_image, driving_region_params, source_region_params, bg_params=bg_params)
         deformed_source = self.create_deformed_source_image(source_image, sparse_motion)
+
         sparse_motion = sparse_motion.permute(0, 1, 4, 2, 3)
         smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
         sparse_motion = torch.cat([sparse_motion, smpl_flow], dim=1)
@@ -241,21 +227,16 @@ class PixelwiseFlowPredictor(nn.Module):
             predictor_input = torch.cat([heatmap_representation, deformed_source], dim=2) # region_heatmaps and deformed_source_features
         else:
             predictor_input = heatmap_representation
+
         predictor_input = predictor_input.view(bs, -1, h, w)
-
         predictor_input = torch.cat([predictor_input, smpl_warped, delta_heatmap, delta_depth, delta_normal], dim=1)
-
         prediction = self.hourglass(predictor_input)
 
         mask = self.mask(prediction)
-
-
         mask = F.softmax(mask, dim=1)
         mask = mask.unsqueeze(2)
         deformation = (sparse_motion * mask).sum(dim=1)
-
         deformation = deformation.permute(0, 2, 3, 1)
-
         out_dict['optical_flow'] = deformation
 
         if self.occlusion:

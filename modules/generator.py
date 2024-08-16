@@ -5,22 +5,18 @@ publish, distribute and/or commercialize such code), unless you have entered int
 Such code is provided as-is, without warranty of any kind, express or implied, including any warranties of merchantability,
 title, fitness for a particular purpose, non-infringement, or that such code is free of defects, errors or viruses.
 In no event will Snap Inc. be liable for any damages or losses of any kind arising from the sample code or your use thereof.
+
+Modified by: Tongkai Shi
 """
+
+
 
 import torch
 from torch import nn
 import torch.nn.functional as F
-from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, DownBlock2d
-from modules.util import SMPLStyledResBlock2d, SMPLStyledUpBlock2d, SMPLStyledSameBlock2d
-from modules.util import StyledResBlock2d, StyledUpBlock2d, StyledSameBlock2d
-from modules.util import kpt2heatmap
-from utils.pose_utils import smpl2kpts
-from modules.new_conv import SMPLStyledConv2d, ModulatedConv2d, MyModule
+from modules.util import ResBlock2d, SameBlock2d, UpBlock2d
 from modules.pixelwise_flow_predictor import PixelwiseFlowPredictor
-from modules.backbones import Encoder, QKVLinear, StructBlock
-from modules.super_resolution import RCAN
-
-import math
+from modules.backbones import Encoder
 
 
 class Generator(nn.Module):
@@ -93,28 +89,15 @@ class Generator(nn.Module):
             out = input_previous if input_previous is not None else input_skip
         return out
 
-    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None):
+
+    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None, source_depth=None, driving_depth=None):
         output_dict = {}
         if self.pixelwise_flow_predictor is not None:
-            motion_params = self.pixelwise_flow_predictor(source_image=source_image,
-                                                          driving_region_params=driving_region_params,
-                                                          source_region_params=source_region_params,
-                                                          bg_params=bg_params,
-                                                          driving_smpl=driving_smpl, source_smpl=source_smpl,
-                                                          source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr)
-
-            normal_map = motion_params['normal_map']
-            output_dict['normal_map_from'] = motion_params['normal_map_from']
-            output_dict['normal_map_to'] = motion_params['normal_map_to']
-            output_dict['normal_map'] = motion_params['normal_map']
-            output_dict['depth_map'] = motion_params['depth_map']
-            output_dict["deformed"] = self.deform_input(source_image, motion_params['optical_flow'])
+            motion_params = self.pixelwise_flow_predictor(source_image=source_image, driving_region_params=driving_region_params, source_region_params=source_region_params, bg_params=bg_params,
+                                                          driving_smpl=driving_smpl, source_smpl=source_smpl, source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr,
+                                                          source_depth=source_depth, driving_depth=driving_depth)
             output_dict["optical_flow"] = motion_params['optical_flow']
             output_dict['smpl_warped'] = motion_params['smpl_warped']
-            if 'combine_mask' in motion_params:
-                output_dict['combine_mask'] = motion_params['combine_mask']
-            if 'smpl_mask' in motion_params:
-                output_dict['smpl_mask'] = motion_params['smpl_mask']
             if 'occlusion_map' in motion_params:
                 output_dict['occlusion_map'] = motion_params['occlusion_map']
         else:
@@ -131,13 +114,12 @@ class Generator(nn.Module):
             smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
 
         deformed_image = self.deform_input(source_image, motion_params['optical_flow'])
+        output_dict["deformed"] = deformed_image
         if deformed_image.shape[2] != motion_params['occlusion_map'].shape[2] or deformed_image.shape[3] != motion_params['occlusion_map'].shape[3]:
             occlusion_map = F.interpolate(motion_params['occlusion_map'], size=deformed_image.shape[2:], mode='bilinear')
 
-        # heatmap = kpt2heatmap(smpl2kpts(driving_smpl.squeeze(-1)), spatial_size=(deformed_image.shape[2], deformed_image.shape[3]),sigma=3.0)
         heatmap = motion_params['heatmap']
-        depth_map = motion_params['depth_map']
-        inputs = torch.cat([deformed_image, occlusion_map, heatmap, normal_map, depth_map], dim=1)
+        inputs = torch.cat([deformed_image, occlusion_map, heatmap, driving_smpl_rdr, driving_depth], dim=1)
 
         skips = self.encoder(inputs)
         out = skips[-1]
@@ -175,44 +157,6 @@ class Generator(nn.Module):
 
         if self.skips:
             out = occlusion_map * deformed_image + (1 - occlusion_map) * out
-        output_dict["prediction"] = out
-
-        return output_dict
-
-    def compute_fea(self, source_image):
-        out = self.first(source_image)
-        for i in range(len(self.down_blocks)):
-            out = self.down_blocks[i](out)
-        return out
-
-    def forward_with_flow(self, source_image, optical_flow, occlusion_map):
-        out = self.first(source_image)
-        skips = [out]
-        for i in range(len(self.down_blocks)):
-            out = self.down_blocks[i](out)
-            skips.append(out)
-
-        output_dict = {}
-        motion_params = {}
-        motion_params["optical_flow"] = optical_flow
-        motion_params["occlusion_map"] = occlusion_map
-        output_dict["deformed"] = self.deform_input(source_image, motion_params['optical_flow'])
-
-        out = self.apply_optical(input_previous=None, input_skip=out, motion_params=motion_params)
-
-        out = self.bottleneck(out)
-        for i in range(len(self.up_blocks)):
-            if self.skips:
-                out = self.apply_optical(input_skip=skips[-(i + 1)], input_previous=out, motion_params=motion_params)
-            out = self.up_blocks[i](out)
-        if self.skips:
-            out = self.apply_optical(input_skip=skips[0], input_previous=out, motion_params=motion_params)
-        out = self.final(out)
-        out = torch.sigmoid(out)
-
-        if self.skips:
-            out = self.apply_optical(input_skip=source_image, input_previous=out, motion_params=motion_params)
-
         output_dict["prediction"] = out
 
         return output_dict

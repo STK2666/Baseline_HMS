@@ -211,6 +211,22 @@ class Visualizer:
             smpl_warped = np.transpose(smpl_warped, [0, 2, 3, 1])
             images.append(smpl_warped)
 
+        if 'coarse_deformed' in out:
+            coarse_deformed = out['coarse_deformed'].data.cpu().numpy()
+            coarse_deformed = np.transpose(coarse_deformed, [0, 2, 3, 1])
+            images.append(coarse_deformed)
+
+        if 'fine_deformed' in out:
+            fine_deformed = out['fine_deformed'].data.cpu().numpy()
+            fine_deformed = np.transpose(fine_deformed, [0, 2, 3, 1])
+            images.append(fine_deformed)
+
+        if 'combined_mask' in out:
+            combined_mask = out['combined_mask'].data.cpu().repeat(1, 3, 1, 1)
+            combined_mask = F.interpolate(combined_mask, size=source.shape[1:3]).numpy()
+            combined_mask = np.transpose(combined_mask, [0, 2, 3, 1])
+            images.append(combined_mask)
+
         # Occlusion map
         if 'occlusion_map' in out:
             occlusion_map = out['occlusion_map'].data.cpu().repeat(1, 3, 1, 1)

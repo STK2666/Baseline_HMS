@@ -98,8 +98,10 @@ class Generator(nn.Module):
                                                           source_depth=source_depth, driving_depth=driving_depth)
             output_dict["optical_flow"] = motion_params['optical_flow']
             output_dict['smpl_warped'] = motion_params['smpl_warped']
-            if 'occlusion_map' in motion_params:
-                output_dict['occlusion_map'] = motion_params['occlusion_map']
+            output_dict['coarse_deformed'] = motion_params['coarse_deformed']
+            output_dict['fine_deformed'] = motion_params['fine_deformed']
+            output_dict['combined_mask'] = motion_params['combined_mask']
+            output_dict['occlusion_map'] = motion_params['occlusion_map']
         else:
             motion_params = None
 
@@ -115,8 +117,9 @@ class Generator(nn.Module):
 
         deformed_image = self.deform_input(source_image, motion_params['optical_flow'])
         output_dict["deformed"] = deformed_image
+        occlusion_map = motion_params['occlusion_map']
         if deformed_image.shape[2] != motion_params['occlusion_map'].shape[2] or deformed_image.shape[3] != motion_params['occlusion_map'].shape[3]:
-            occlusion_map = F.interpolate(motion_params['occlusion_map'], size=deformed_image.shape[2:], mode='bilinear')
+            occlusion_map = F.interpolate(occlusion_map, size=deformed_image.shape[2:], mode='bilinear')
 
         heatmap = motion_params['heatmap']
         inputs = torch.cat([deformed_image, occlusion_map, heatmap, driving_smpl_rdr, driving_depth], dim=1)

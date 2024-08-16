@@ -39,9 +39,9 @@ def smpl2kpts(smpl_params):
 
     keypoints = orthographic_proj_withz_idrot(joints, cam)
 
-    keypoints = (keypoints + 1) / 2
+    # keypoints = (keypoints + 1) / 2
 
-    # N,K,2
+    # N,K,2 (-1,1)
     return keypoints
 
 

@@ -16,7 +16,7 @@ import wandb
 from pytorch_msssim import ssim
 
 
-def train(config, inpainting_network, bg_predictor, dense_motion_network, checkpoint, log_dir, dataset, test_dataset):
+def train(config, inpainting_network, bg_predictor, dense_motion_network, checkpoint, log_dir, dataset):
     wandb.init(
         # set the wandb project where this run will be logged
         project = config['dataset'],

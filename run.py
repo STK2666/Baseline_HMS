@@ -31,7 +31,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument("--config", default="config/lsa.yaml", help="path to config")
-    parser.add_argument("--mode", default="train_test", choices=["train_test","train", "reconstruction", "train_avd", "generate_video"])
+    parser.add_argument("--mode", default="train", choices=["train", "generate_video"])
     parser.add_argument("--log_dir", default='log', help="path to log into")
     parser.add_argument("--run_name", default=None, help="wandb run name")
     parser.add_argument("--dataset", default='Fashion_new', help="wandb project name")

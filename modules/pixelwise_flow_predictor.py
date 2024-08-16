@@ -175,9 +175,7 @@ class PixelwiseFlowPredictor(nn.Module):
         normal_map_to = self.get_normals(cam_to, vert_to)
         depth_to = self.renderer.render_depth(cam_to, vert_to)
         depth_from = self.renderer.render_depth(cam_from, vert_from)
-        # print(nomal_map_to.shape, nomal_map_to.min(), nomal_map_to.max())
-        # import cv2
-        # cv2.imwrite("normal_map.png", (nomal_map_to[0].cpu().numpy().transpose(1,2,0)*127.5+127.5).astype(np.uint8))
+
         f2verts, _, _ = self.renderer.render_fim_wim(cam_from, vert_from)
         f2verts = f2verts[:, :, :, 0:2]
 
@@ -190,7 +188,7 @@ class PixelwiseFlowPredictor(nn.Module):
         out_dict = dict()
         driving_smpl = driving_smpl.squeeze(-1)
         source_smpl = source_smpl.squeeze(-1)
-        # smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
+
         smpl_flow, smpl_mask, normal_map_from, normal_map_to, depth_to, depth_from = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
         normal_map = normal_map_to
         depth_to = depth_to.unsqueeze(1)

@@ -72,12 +72,6 @@ class Generator(nn.Module):
             optical_flow = optical_flow.permute(0, 2, 3, 1)
         return F.grid_sample(inp, optical_flow)
 
-    def dot_product_attention(self, query, key, value):
-        d_k = query.size(-1)
-        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(d_k)
-        p_attn = F.softmax(scores, dim = -1)
-        return torch.matmul(p_attn, value)
-
     def apply_optical(self, input_previous=None, input_skip=None, motion_params=None):
         if motion_params is not None:
             if 'occlusion_map' in motion_params:
@@ -99,14 +93,16 @@ class Generator(nn.Module):
             out = input_previous if input_previous is not None else input_skip
         return out
 
-    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg=None, source_smpl_rdr=None, driving_smpl_rdr=None):
+    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None):
         output_dict = {}
         if self.pixelwise_flow_predictor is not None:
             motion_params = self.pixelwise_flow_predictor(source_image=source_image,
                                                           driving_region_params=driving_region_params,
                                                           source_region_params=source_region_params,
+                                                          bg_params=bg_params,
                                                           driving_smpl=driving_smpl, source_smpl=source_smpl,
-                                                          bg=bg)
+                                                          source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr)
+
             normal_map = motion_params['normal_map']
             output_dict['normal_map_from'] = motion_params['normal_map_from']
             output_dict['normal_map_to'] = motion_params['normal_map_to']

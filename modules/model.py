@@ -11,12 +11,9 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 from modules.util import AntiAliasInterpolation2d, make_coordinate_grid
-from modules.misc import image_to_edge_tensor
 from torchvision import models
 import numpy as np
 from torch.autograd import grad
-from pytorch_msssim import ssim
-import lpips
 
 
 def gram_matrix(feature_map):
@@ -145,10 +142,6 @@ class Transform:
         return jacobian
 
 
-def detach_kp(kp):
-    return {key: value.detach() for key, value in kp.items()}
-
-
 class GeneratorFullModel(torch.nn.Module):
     def __init__(self, bg_predictor, region_predictor, generator, train_params, discriminator=None):
         super(GeneratorFullModel, self).__init__()
@@ -180,10 +173,10 @@ class GeneratorFullModel(torch.nn.Module):
         source_region_params = self.region_predictor(x['source_rdr'], x['source_smpl'])
         driving_region_params = self.region_predictor(x['driving_rdr'], x['driving_smpl'])
 
-        generated = self.generator(x['source'], source_region_params=source_region_params,
-                                   driving_region_params=driving_region_params, driving_smpl=x['driving_smpl'], source_smpl=x['source_smpl'], bg=self.bg_predictor,
+        bg_params = self.bg_predictor(x['source'], x['source_rdr'], x['driving_rdr']) if self.bg_predictor else None
+        generated = self.generator(x['source'], source_region_params=source_region_params, driving_region_params=driving_region_params, bg_params=bg_params,
+                                   driving_smpl=x['driving_smpl'], source_smpl=x['source_smpl'],
                                    source_smpl_rdr=x['source_rdr'], driving_smpl_rdr=x['driving_rdr'])
-        # bg_params = self.bg_predictor(x['source'], normal_map_from, normal_map_to)
         generated.update({'source_region_params': source_region_params, 'driving_region_params': driving_region_params})
 
         loss_values = {}
@@ -204,7 +197,6 @@ class GeneratorFullModel(torch.nn.Module):
             value_total = value_total * (4/len(self.scales))
             loss_values['perceptual'] = value_total
 
-
         # style loss
         if sum(self.loss_weights['style']) != 0:
             value_total = 0
@@ -216,48 +208,14 @@ class GeneratorFullModel(torch.nn.Module):
                 value_total += weight * value
             loss_values['style'] = value_total
 
-
         # L1 loss
         if self.loss_weights['l1'] != 0:
             value = torch.abs(x['driving'] - generated['prediction']).mean()
             loss_values['l1'] = self.loss_weights['l1'] * value
 
-
-        # equivariance loss
-        if (self.loss_weights['equivariance_shift'] + self.loss_weights['equivariance_affine']) != 0:
-            transform = Transform(x['driving'].shape[0], **self.train_params['transform_params'])
-            transformed_frame = transform.transform_frame(x['driving_rdr'])
-            transformed_region_params = self.region_predictor(transformed_frame, x['driving_smpl'])
-
-            generated['transformed_frame'] = transformed_frame
-            generated['transformed_region_params'] = transformed_region_params
-
-            if self.loss_weights['equivariance_shift'] != 0:
-                value = torch.abs(driving_region_params['shift'] -
-                                  transform.warp_coordinates(transformed_region_params['shift'])).mean()
-                loss_values['equivariance_shift'] = self.loss_weights['equivariance_shift'] * value
-
-            if self.loss_weights['equivariance_affine'] != 0:
-                affine_transformed = torch.matmul(transform.jacobian(transformed_region_params['shift']),
-                                                  transformed_region_params['affine'])
-
-                normed_driving = torch.inverse(driving_region_params['affine'])
-                normed_transformed = affine_transformed
-                value = torch.matmul(normed_driving, normed_transformed)
-                eye = torch.eye(2).view(1, 1, 2, 2).type(value.type())
-
-                if self.generator.pixelwise_flow_predictor.revert_axis_swap:
-                    value = value * torch.sign(value[:, :, 0:1, 0:1])
-
-                value = torch.abs(eye - value).mean()
-                loss_values['equivariance_affine'] = self.loss_weights['equivariance_affine'] * value
-
         # adversarial loss
         if self.loss_weights['adv'] != 0:
             criterion = nn.BCELoss()
-
-            # real_edge, gray_image = image_to_edge_tensor(x['driving'], sigma=2.0)
-            # fake_pred, fake_edge = self.discriminator(generated['prediction'], gray_image, real_edge, is_real=False)
             fake_pred = self.discriminator(generated['prediction'])
 
             real_target = torch.tensor(1.0).expand_as(fake_pred).to(fake_pred.device)

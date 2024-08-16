@@ -4,7 +4,7 @@ import torch
 import random
 import numpy as np
 
-seed = 1234
+seed = 54321
 
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)

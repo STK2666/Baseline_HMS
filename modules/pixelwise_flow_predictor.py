@@ -44,13 +44,13 @@ class PixelwiseFlowPredictor(nn.Module):
         normal_channel = 3
         heatmap_channel = 19
 
-        uns_hourglass = Hourglass(block_expansion=block_expansion, in_features=depth_channel+normal_channel+heatmap_channel, max_features=max_features, num_blocks=num_blocks)
-        self.uns_flow = nn.Sequential(uns_hourglass, nn.Conv2d(uns_hourglass.out_filters, 2, kernel_size=(7, 7), padding=(3, 3)))
+        # uns_hourglass = Hourglass(block_expansion=block_expansion, in_features=depth_channel+normal_channel+heatmap_channel, max_features=max_features, num_blocks=num_blocks)
+        # self.uns_flow = nn.Sequential(uns_hourglass, nn.Conv2d(uns_hourglass.out_filters, 2, kernel_size=(7, 7), padding=(3, 3)))
 
-        uns_hourglass_in_features = (num_regions + 1) * (num_channels * use_deformed_source + 1) + num_channels
+        uns_hourglass_in_features = (num_regions + 1) * (num_channels * use_deformed_source + 1) + depth_channel + heatmap_channel + normal_channel
+        print(uns_hourglass_in_features)
         self.uns_hourglass = Hourglass(block_expansion=block_expansion, in_features=uns_hourglass_in_features, max_features=max_features, num_blocks=num_blocks)
-        # self.hourglass = Hourglass(block_expansion=block_expansion, in_features=hourglass_in_features, max_features=max_features, num_blocks=um_blocks)
-        num_unsflow = num_regions + 2
+        num_unsflow = num_regions + 1
         self.uns_mask = nn.Conv2d(self.uns_hourglass.out_filters, num_unsflow, kernel_size=(7, 7), padding=(3, 3))
 
         # Geometry supervised flow
@@ -199,7 +199,6 @@ class PixelwiseFlowPredictor(nn.Module):
         if self.scale_factor != 1:
             source_ori = source_image.clone()
             source_image = self.down(source_image)
-            # smpl_warped = self.down(smpl_warped)
 
             driving_heatmap = F.interpolate(driving_heatmap, scale_factor=self.scale_factor, mode='bilinear')
             source_heatmap = F.interpolate(source_heatmap, scale_factor=self.scale_factor, mode='bilinear')
@@ -210,32 +209,26 @@ class PixelwiseFlowPredictor(nn.Module):
             source_smpl_rdr = F.interpolate(source_smpl_rdr, scale_factor=self.scale_factor, mode='bilinear')
             driving_smpl_rdr = F.interpolate(driving_smpl_rdr, scale_factor=self.scale_factor, mode='bilinear')
 
-            # smpl_flow = F.interpolate(smpl_flow.permute(0, 3, 1, 2), size=(smpl_warped.shape[2], smpl_warped.shape[3]), mode='bilinear').permute(0, 2, 3, 1)
-
         bs, _, h, w = source_image.shape
+        # unsupervised flow
         heatmap_representation = self.get_heatmap_representations(source_image, driving_region_params, source_region_params)
-
-        delta_depth = driving_depth - source_depth
-        delta_heatmap = driving_heatmap - source_heatmap
-        delta_normal = driving_smpl_rdr - source_smpl_rdr
-        uns_flow = self.uns_flow(torch.cat([delta_depth, delta_heatmap, delta_normal], dim=1)).permute(0, 2, 3, 1)
-        deformed_uns = F.grid_sample(source_image, uns_flow)
-        uns_flow = uns_flow.permute(0, 3, 1, 2).unsqueeze(1)
-
+        # uns_flow = self.uns_flow(torch.cat([delta_depth, delta_heatmap, delta_normal], dim=1)).permute(0, 2, 3, 1)
+        # deformed_uns = F.grid_sample(source_image, uns_flow)
+        # uns_flow = uns_flow.permute(0, 3, 1, 2).unsqueeze(1)
         uns_flow_coarse = self.get_motion_params_flows(source_image, driving_region_params, source_region_params, bg_params=bg_params)
         uns_warped = self.get_deformed(source_image, uns_flow_coarse)
-
         uns_flow_coarse = uns_flow_coarse.permute(0, 1, 4, 2, 3)
-        uns_flow_coarse = torch.cat([uns_flow_coarse, uns_flow], dim=1)
-
+        # uns_flow_coarse = torch.cat([uns_flow_coarse, uns_flow], dim=1)
         if self.use_deformed_source:
+            delta_depth = driving_depth - source_depth
+            delta_heatmap = driving_heatmap - source_heatmap
+            delta_normal = driving_smpl_rdr - source_smpl_rdr
             uns_input = torch.cat([heatmap_representation, uns_warped], dim=2) # region_heatmaps and deformed_source_features
         else:
             uns_input = heatmap_representation
 
-        # unsupervised flow
         uns_input = uns_input.view(bs, -1, h, w)
-        uns_input = torch.cat([uns_input, deformed_uns], dim=1)
+        uns_input = torch.cat([uns_input, delta_depth, delta_heatmap, delta_normal], dim=1)
         uns_prediction = self.uns_hourglass(uns_input)
 
         uns_mask = self.uns_mask(uns_prediction)

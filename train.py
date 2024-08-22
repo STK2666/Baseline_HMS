@@ -5,7 +5,7 @@ from logger import Logger
 
 from modules.model import GeneratorFullModel
 from modules.misc import requires_grad, discriminator_loss_func, image_to_edge_tensor
-from modules.discriminator.discriminator import Discriminator
+from modules.discriminator.discriminator import Discriminator, ResDiscriminator
 
 from torch.optim.lr_scheduler import MultiStepLR, LambdaLR
 from torch.nn.utils import clip_grad_norm_
@@ -45,7 +45,8 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
     optimizer_discriminator = None
     if train_params['loss_weights']['adv'] != 0:
         # discriminator = Discriminator(image_in_channels=3, edge_in_channels=2).to(next(dense_motion_network.parameters()).device)
-        discriminator = Discriminator(config['model_params']['common_params']['num_channels']).to(next(dense_motion_network.parameters()).device)
+        # discriminator = Discriminator(config['model_params']['common_params']['num_channels']).to(next(dense_motion_network.parameters()).device)
+        discriminator = ResDiscriminator().to(next(dense_motion_network.parameters()).device)
         optimizer_discriminator = torch.optim.Adam(
             [{'params':discriminator.parameters(),'initial_lr': train_params['lr_generator']*0.1}],
             lr=train_params['lr_generator']*0.1, betas=(0.5, 0.999), weight_decay = 1e-4)

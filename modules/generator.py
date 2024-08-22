@@ -41,6 +41,9 @@ class Generator(nn.Module):
 
         self.encoder = Encoder(in_channels=num_channels+24, block_expansion=block_expansion, max_features=max_features,
                                num_down_blocks=num_down_blocks, skips=skips)
+        # if mode == 'style':
+        #     self.style_encoder = Encoder(in_channels=num_channels, block_expansion=block_expansion, max_features=max_features,
+        #                                     num_down_blocks=num_down_blocks+3, skips=skips)
 
         self.bottleneck = torch.nn.Sequential()
         in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
@@ -98,9 +101,9 @@ class Generator(nn.Module):
                                                           source_depth=source_depth, driving_depth=driving_depth)
             output_dict["optical_flow"] = motion_params['optical_flow']
             output_dict['smpl_warped'] = motion_params['smpl_warped']
-            output_dict['coarse_deformed'] = motion_params['coarse_deformed']
-            output_dict['fine_deformed'] = motion_params['fine_deformed']
-            output_dict['combined_mask'] = motion_params['combined_mask']
+            # output_dict['coarse_deformed'] = motion_params['coarse_deformed']
+            # output_dict['fine_deformed'] = motion_params['fine_deformed']
+            # output_dict['combined_mask'] = motion_params['combined_mask']
             output_dict['occlusion_map'] = motion_params['occlusion_map']
         else:
             motion_params = None

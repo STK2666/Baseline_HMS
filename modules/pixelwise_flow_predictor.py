@@ -27,13 +27,13 @@ class PixelwiseFlowPredictor(nn.Module):
     """
 
     def __init__(self, block_expansion, num_blocks, max_features, num_regions, num_channels,
-                 estimate_occlusion_map=False, scale_factor=1, region_var=0.01,
-                 use_covar_heatmap=False, use_deformed_source=True, revert_axis_swap=False, 
+                 estimate_occlusion_map=True, scale_factor=1, region_var=0.01,
+                 use_covar_heatmap=False, use_deformed_source=True, revert_axis_swap=False,
                  mode='conv_concat', unsupervised_flow=False, smpl_rdr_input=False):
         super(PixelwiseFlowPredictor, self).__init__()
         self.conv_mode = mode.split('_')[0]
         self.flow_mode = mode.split('_')[1]
-        
+
         self.num_regions = num_regions
         self.scale_factor = scale_factor
         self.region_var = region_var
@@ -42,11 +42,11 @@ class PixelwiseFlowPredictor(nn.Module):
         self.revert_axis_swap = revert_axis_swap
         self.unsupervised_flow = unsupervised_flow
         self.smpl_rdr_input = smpl_rdr_input
-        
+
 
         if self.scale_factor != 1:
             self.down = AntiAliasInterpolation2d(num_channels, self.scale_factor)
-        
+
         if self.smpl_rdr_input:
             hourglass_in_features = (num_regions + 1) * (num_channels * use_deformed_source + 1) + 2*num_channels
         else:
@@ -54,7 +54,7 @@ class PixelwiseFlowPredictor(nn.Module):
         self.hourglass = Hourglass(block_expansion=block_expansion,
                                    in_features=hourglass_in_features,
                                    max_features=max_features, num_blocks=num_blocks)
-        
+
         if self.unsupervised_flow:
             uns_hourglass = Hourglass(block_expansion=block_expansion, in_features=num_channels*3,
                                         max_features=max_features, num_blocks=num_blocks)
@@ -151,14 +151,14 @@ class PixelwiseFlowPredictor(nn.Module):
         sparse_deformed = F.grid_sample(source_repeat, sparse_motions)
         sparse_deformed = sparse_deformed.view((bs, self.num_regions + 1, -1, h, w))
         return sparse_deformed
-    
+
 
     def get_normals(self, cams, verts):
         # get normal map (-1, 1)
         normal_map = self.renderer.render_normal_map(cams, verts)
         normal_map = normal_map*2 -1
         return normal_map
-    
+
     def get_verts(self, smpl_para, get_landmarks=False):
         cam_nc = 3
         pose_nc = 72
@@ -179,8 +179,8 @@ class PixelwiseFlowPredictor(nn.Module):
     def get_flow(self, source_smpl, driving_smpl):
         cam_from, vert_from = self.get_verts(source_smpl)
         cam_to, vert_to = self.get_verts(driving_smpl)
-        normal_map_from = self.get_normals(cam_from, vert_from)
-        normal_map_to = self.get_normals(cam_to, vert_to)
+        # normal_map_from = self.get_normals(cam_from, vert_from)
+        # normal_map_to = self.get_normals(cam_to, vert_to)
         # print(nomal_map_to.shape, nomal_map_to.min(), nomal_map_to.max())
         # import cv2
         # cv2.imwrite("normal_map.png", (nomal_map_to[0].cpu().numpy().transpose(1,2,0)*127.5+127.5).astype(np.uint8))
@@ -190,7 +190,7 @@ class PixelwiseFlowPredictor(nn.Module):
         _, step_fim, step_wim = self.renderer.render_fim_wim(cam_to, vert_to)
         T, occlu_map = self.renderer.cal_bc_transform(f2verts, step_fim, step_wim)
 
-        return T, occlu_map, normal_map_from, normal_map_to
+        return T, occlu_map
 
     def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None):
         # if self.scale_factor != 1:
@@ -208,7 +208,7 @@ class PixelwiseFlowPredictor(nn.Module):
         #                                            source_region_params, bg_params=bg_params)
         # deformed_source = self.create_deformed_source_image(source_image, sparse_motion)
         # sparse_motion = sparse_motion.permute(0, 1, 4, 2, 3)
-        
+
         # if self.use_deformed_source:
         #     predictor_input = torch.cat([heatmap_representation, deformed_source], dim=2) # region_heatmaps and deformed_source_features
         # else:
@@ -228,7 +228,7 @@ class PixelwiseFlowPredictor(nn.Module):
         #     mask = self.mask(prediction, smpl)
         # else:
         #     mask = self.mask(prediction)
-        
+
         if self.flow_mode != 'vsbmp' and self.flow_mode != 'concat':
             mask = F.softmax(mask, dim=1)
             mask = mask.unsqueeze(2)
@@ -247,7 +247,7 @@ class PixelwiseFlowPredictor(nn.Module):
                 mask_index = (smpl_mask == 1.0).squeeze(1).repeat(1, 2, 1, 1)
                 deformation[mask_index] = deformation_smpl[mask_index]
                 out_dict['smpl_mask'] = smpl_mask.squeeze(2)
-    
+
             if self.flow_mode == 'cncvr':
                 smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
                 smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
@@ -266,13 +266,13 @@ class PixelwiseFlowPredictor(nn.Module):
             driving_smpl = driving_smpl.squeeze(-1)
             source_smpl = source_smpl.squeeze(-1)
             smpl = torch.concat([driving_smpl, source_smpl], dim=-1)
-            smpl_flow, smpl_mask, normal_map_from, normal_map_to = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
-            
+            smpl_flow, smpl_mask = self.get_flow(source_smpl, driving_smpl) # (N,H,W,2), (N,H,W)
+
             if self.scale_factor != 1:
                 source_image = self.down(source_image)
-                if self.smpl_rdr_input or self.unsupervised_flow:
-                    normal_map_from = self.down(normal_map_from)
-                    normal_map_to = self.down(normal_map_to)
+                # if self.smpl_rdr_input or self.unsupervised_flow:
+                #     normal_map_from = self.down(normal_map_from)
+                #     normal_map_to = self.down(normal_map_to)
 
             bs, _, h, w = source_image.shape
 
@@ -282,7 +282,7 @@ class PixelwiseFlowPredictor(nn.Module):
                                                        source_region_params, bg_params=bg_params)
             deformed_source = self.create_deformed_source_image(source_image, sparse_motion)
             sparse_motion = sparse_motion.permute(0, 1, 4, 2, 3)
-        
+
             if self.use_deformed_source:
                 predictor_input = torch.cat([heatmap_representation, deformed_source], dim=2) # region_heatmaps and deformed_source_features
             else:
@@ -297,8 +297,8 @@ class PixelwiseFlowPredictor(nn.Module):
                 mask = self.mask(prediction, smpl)
             else:
                 mask = self.mask(prediction)
-            
-            out_dict['normal_map'] = normal_map_to
+
+            # out_dict['normal_map'] = normal_map_to
             smpl_flow = smpl_flow.unsqueeze(-1).permute(0, 4, 3, 1, 2)
             smpl_mask = smpl_mask.unsqueeze(1)
             N,_,_,H,W = sparse_motion.shape

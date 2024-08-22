@@ -43,25 +43,10 @@ class Generator(nn.Module):
         else:
             self.pixelwise_flow_predictor = None
 
-        # self.first = SameBlock2d(num_channels+26, block_expansion, kernel_size=(7, 7), padding=(3, 3))
-        # # self.first = SameBlock2d(num_channels+4, block_expansion, kernel_size=(7, 7), padding=(3, 3))
-        # # self.first = SameBlock2d(num_channels+1, block_expansion, kernel_size=(7, 7), padding=(3, 3))
-        # self.pose_first = SameBlock2d(19, block_expansion, kernel_size=(7, 7), padding=(3, 3))
-        # self.normal_first = SameBlock2d(3, block_expansion, kernel_size=(7, 7), padding=(3, 3))
 
-        # if self.mode == 'smplstyle' or self.mode == 'style':
-        #     style_encoder_blocks = [SameBlock2d(num_channels, block_expansion, kernel_size=(7, 7), padding=(3, 3))]
-        #     for i in range(num_down_blocks+3):
-        #         in_features = min(max_features, block_expansion * (2 ** i))
-        #         out_features = min(max_features, block_expansion * (2 ** (i + 1)))
-        #         style_encoder_blocks.append(DownBlock2d(in_features, out_features, kernel_size=(3, 3), padding=(1, 1)))
-        #     self.style_encoder = nn.ModuleList(style_encoder_blocks)
-        self.encoder = Encoder(in_channels=num_channels+23, block_expansion=block_expansion, max_features=max_features,
+        self.encoder = Encoder(in_channels=num_channels+24, block_expansion=block_expansion, max_features=max_features,
                                num_down_blocks=num_down_blocks, skips=skips)
-        self.pose_encoder = Encoder(in_channels=19, block_expansion=block_expansion, max_features=max_features,
-                                    num_down_blocks=num_down_blocks, skips=skips)
-        self.normal_encoder = Encoder(in_channels=3, block_expansion=block_expansion, max_features=max_features,
-                                    num_down_blocks=num_down_blocks, skips=skips)
+
         # self.style_encoder = Encoder(in_channels=num_channels, block_expansion=block_expansion, max_features=max_features*2,
                                         # num_down_blocks=num_down_blocks+3, skips=False)
         if self.mode == 'smplstyle' or self.mode == 'style':
@@ -70,7 +55,7 @@ class Generator(nn.Module):
         # self.linear_q = QKVLinear(block_expansion, max_features, num_down_blocks)
         # self.linear_k = QKVLinear(block_expansion, max_features, num_down_blocks)
         # self.linear_v = QKVLinear(block_expansion, max_features, num_down_blocks)
-        
+
         self.bottleneck = torch.nn.Sequential()
         in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
         for i in range(num_bottleneck_blocks):
@@ -103,7 +88,7 @@ class Generator(nn.Module):
         # self.styled_conv_blocks = nn.ModuleList(styled_conv_blocks)
 
 
-        
+
         # self.pose_bottleneck = torch.nn.Sequential()
         # in_features = min(max_features, block_expansion * (2 ** num_down_blocks))
         # for i in range(num_bottleneck_blocks):
@@ -156,16 +141,13 @@ class Generator(nn.Module):
             out = input_previous if input_previous is not None else input_skip
         return out
 
-    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None):
+    def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None, source_depth=None, driving_depth=None):
         output_dict = {}
         if self.pixelwise_flow_predictor is not None:
-            motion_params = self.pixelwise_flow_predictor(source_image=source_image,
-                                                          driving_region_params=driving_region_params,
-                                                          source_region_params=source_region_params,
-                                                          driving_smpl=driving_smpl, source_smpl=source_smpl,
-                                                        #   source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr,
-                                                          bg_params=bg_params)
-            normal_map = motion_params['normal_map']
+            motion_params = self.pixelwise_flow_predictor(source_image=source_image, driving_region_params=driving_region_params, source_region_params=source_region_params, bg_params=bg_params,
+                                                          driving_smpl=driving_smpl, source_smpl=source_smpl, source_smpl_rdr=source_smpl_rdr, driving_smpl_rdr=driving_smpl_rdr,
+                                                          )
+            # normal_map = motion_params['normal_map']
             output_dict["deformed"] = self.deform_input(source_image, motion_params['optical_flow'])
             output_dict["optical_flow"] = motion_params['optical_flow']
             if 'combine_mask' in motion_params:
@@ -198,7 +180,7 @@ class Generator(nn.Module):
             occlusion_map = F.interpolate(motion_params['occlusion_map'], size=deformed_image.shape[2:], mode='bilinear')
         # inputs = torch.cat([deformed_image, occlusion_map], dim=1)
         heatmap = kpt2heatmap(smpl2kpts(driving_smpl.squeeze(-1)), spatial_size=(deformed_image.shape[2], deformed_image.shape[3]),sigma=3.0)
-        inputs = torch.cat([deformed_image, occlusion_map,heatmap,normal_map], dim=1)
+        inputs = torch.cat([deformed_image, driving_smpl_rdr,occlusion_map,heatmap, driving_depth], dim=1)
         # inputs = torch.cat([deformed_image, occlusion_map,driving_smpl_rdr,heatmap,normal_map], dim=1)
         # out = self.first(inputs)
         # skips = [out]
@@ -207,13 +189,13 @@ class Generator(nn.Module):
         #     skips.append(out)
         skips = self.encoder(inputs)
         out = skips[-1]
-        
+
         # pose = self.pose_encoder(heatmap)
-        
+
         # normal = self.normal_encoder(normal_map)
 
         out = self.bottleneck(out)
-        
+
         output_dict["bottle_neck_feat"] = out
 
         for i in range(len(self.encoder.blocks)):

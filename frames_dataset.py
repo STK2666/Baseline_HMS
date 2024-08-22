@@ -134,15 +134,14 @@ class FramesDataset(Dataset):
 
         video_name = os.path.basename(path)
         video_path = os.path.join(path, 'frames')
-        rendered_path = os.path.join(path, 'rendered')
+        rendered_path = os.path.join(path, 'normal')
         json_path = os.path.join(path, 'kptsmpls')
+        depth_path = os.path.join(path, 'depth')
         if self.is_train:
             frames = os.listdir(video_path)
             frames.sort()
             num_frames = len(frames)
             frame_idx = np.sort(np.random.choice(num_frames, replace=True, size=2))
-            # frame_idx[0] = 0
-            # print(frame_idx)
 
             if self.frame_shape is not None:
                 resize_fn = partial(resize, output_shape=self.frame_shape)
@@ -150,20 +149,19 @@ class FramesDataset(Dataset):
                 resize_fn = img_as_float32
 
             if type(frames[0]) is bytes:
-                video_array = [resize_fn(io.imread(os.path.join(video_path, frames[idx].decode('utf-8')))) for idx in
-                            frame_idx]
-                rendered_array = [resize_fn(io.imread(os.path.join(rendered_path, frames[idx].decode('utf-8')))) for idx in
-                            frame_idx]
+                video_array = [resize_fn(io.imread(os.path.join(video_path, frames[idx].decode('utf-8')))) for idx in frame_idx]
+                rendered_array = [resize_fn(io.imread(os.path.join(rendered_path, frames[idx].decode('utf-8')))) for idx in frame_idx]
+                depth_array = [resize_fn(io.imread(os.path.join(depth_path, frames[idx].decode('utf-8')), as_gray=True)) for idx in frame_idx]
                 smpl_list = [read_json2np(os.path.join(json_path, frames[idx].decode('utf-8'))) for idx in frame_idx]
             else:
                 video_array = [resize_fn(io.imread(os.path.join(video_path, frames[idx]))) for idx in frame_idx]
                 rendered_array = [resize_fn(io.imread(os.path.join(rendered_path, frames[idx]))) for idx in frame_idx]
+                depth_array = [resize_fn(io.imread(os.path.join(depth_path, frames[idx]), as_gray=True)) for idx in frame_idx]
                 smpl_list = [read_json2np(os.path.join(json_path, frames[idx]).replace('.png', '.json')) for idx in frame_idx]
         else:
-            # in this way, it will load all the frames first, which may be slow, so use it only for test stage
             video_array = read_video(video_path, frame_shape=self.frame_shape)
             rendered_array = read_video(rendered_path, frame_shape=self.frame_shape)
-            
+            depth_array = read_video(depth_path, frame_shape=self.frame_shape, as_gray=True)
 
 
             num_frames = len(video_array)
@@ -171,7 +169,8 @@ class FramesDataset(Dataset):
                 num_frames)
             video_array = video_array[frame_idx]
             rendered_array = rendered_array[frame_idx]
-            
+            depth_array = depth_array[frame_idx]
+
             frames = sorted(os.listdir(json_path))
             smpl_list = [read_json2np(os.path.join(json_path, frames[idx])) for idx in frame_idx]
 
@@ -186,6 +185,8 @@ class FramesDataset(Dataset):
             driving = np.array(video_array[1], dtype='float32')
             source_rdr = np.array(rendered_array[0], dtype='float32')
             driving_rdr = np.array(rendered_array[1], dtype='float32')
+            source_dp = np.array(depth_array[0], dtype='float32')
+            driving_dp = np.array(depth_array[1], dtype='float32')
             source_smpl = smpl_list[0]
             driving_smpl = smpl_list[1]
 
@@ -193,6 +194,8 @@ class FramesDataset(Dataset):
             out['source'] = source.transpose((2, 0, 1))
             out['driving_rdr'] = driving_rdr.transpose((2, 0, 1))
             out['source_rdr'] = source_rdr.transpose((2, 0, 1))
+            out['driving_dp'] = np.expand_dims(driving_dp, axis=0)
+            out['source_dp'] = np.expand_dims(source_dp, axis=0)
             out['driving_smpl'] = driving_smpl
             out['source_smpl'] = source_smpl
         else:
@@ -200,6 +203,9 @@ class FramesDataset(Dataset):
             out['video'] = video.transpose((3, 0, 1, 2))
             video_rdr = np.array(rendered_array, dtype='float32')
             out['video_rdr'] = video_rdr.transpose((3, 0, 1, 2))
+            video_dp = np.array(depth_array, dtype='float32')
+            video_dp = np.expand_dims(video_dp, axis=0)
+            out['video_dp'] = video_dp
             out['smpl_list'] = smpl_list
 
         out['name'] = video_name

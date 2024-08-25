@@ -327,7 +327,7 @@ class SMPLConv(nn.Module):
         in_channels,
         out_channels,
         kernel_size,
-        smpl_dim,
+        smpl_dim=85*2,
         demodulate=True,
     ):
         super().__init__()
@@ -462,7 +462,7 @@ class SMPLStyledConv(nn.Module):
         out = self.activate(out)
 
         return out
-    
+
 class MyModule(nn.Module):
     def __init__(self, channel):
         super(MyModule, self).__init__()
@@ -473,7 +473,7 @@ class MyModule(nn.Module):
             nn.Conv2d(channel, channel, kernel_size=1, padding=0, bias=True),
             nn.Sigmoid()
         )
-        
+
     def forward(self, x, heatmap):
         y = self.conv(heatmap)
         return x * y

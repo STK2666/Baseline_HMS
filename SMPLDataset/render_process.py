@@ -99,28 +99,29 @@ def render_process(frames, save_dir_visualization_frames,
         image_skeleton = image_to_tensor(image_skeleton, device)
         image_bbox = image_to_tensor(image_bbox, device)
 
-        with torch.no_grad():
-            cams = smpls_results['cam'][None].float().to(device)
-            pose = smpls_results['pose'][None].float().to(device)
-            shape = smpls_results['shape'][None].float().to(device)
-            verts, _, _ = smpl(beta=shape, theta=pose, get_skin=True)
+        # with torch.no_grad():
+            # cams = smpls_results['cam'][None].float().to(device)
+            # pose = smpls_results['pose'][None].float().to(device)
+            # shape = smpls_results['shape'][None].float().to(device)
+            # verts, _, _ = smpl(beta=shape, theta=pose, get_skin=True)
 
             # normal_map = render.render_normal_map(cams, verts)
             # smpl_image = normal_map
 
-            depth_map = render.render_depth(cams, verts)
-            smpl_image = depth_map
+            # depth_map = render.render_depth(cams, verts)
+            # smpl_image = depth_map
 
             # rd_imgs, _ = render.render(cams, verts, texs)
             # sil = render.render_silhouettes(cams, verts)[:, None].contiguous()
             # white_background = torch.ones_like(crop_img_rgb)
             # smpl_image = white_background * (1 - sil) + rd_imgs * sil
         # fused_images = torch.cat([crop_img_rgb, image_bbox, image_skeleton, smpl_image], dim=0)
-        fused_images = smpl_image
+
+        # fused_images = smpl_image
         # fused_images = torchvision.utils.make_grid(fused_images, nrow=fused_images.shape[0], normalize=True)
 
         visualization_path = os.path.join(save_dir_visualization_frames, crop_name)
-        torchvision.utils.save_image(fused_images, visualization_path)
+        # torchvision.utils.save_image(fused_images, visualization_path)
 
         # out = {
         #     'bbox_xyxy': crop_bbox,
@@ -132,6 +133,20 @@ def render_process(frames, save_dir_visualization_frames,
 
         # kptsmpl_output_path = os.path.join(save_dir_kptsmpl, crop_name)[:-4] + '.json'
         # jsonify(kptsmpl_output_path, out)
+
+
+def render_from_obj(frames, save_dir_visualization_frames,
+            img_size, device, workers, batch_size):
+    render = SMPLRenderer(image_size=img_size).to(device)
+    # smpl = SMPL('./SMPLDataset/checkpoints/smpl_model.pkl').to(device)
+
+    render.set_ambient_light()
+    # texs = render.color_textures().to(device)[None]
+    for obj in frames:
+        normal_map = render.render_normal_map_from_obj(obj)
+        crop_name = os.path.basename(obj).replace('.obj', '.png')
+        visualization_path = os.path.join(save_dir_visualization_frames, crop_name)
+        torchvision.utils.save_image(normal_map, visualization_path)
 
 
 if __name__ == "__main__":

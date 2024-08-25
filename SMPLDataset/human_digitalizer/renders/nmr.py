@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+import trimesh
 
 import neural_renderer as nr
 
@@ -336,6 +337,37 @@ class BaseSMPLRenderer(nn.Module):
         faces = nr.vertices_to_faces(vertices, faces)
         normal_map = nr.rasterize(faces, face_normals, self.image_size, self.anti_aliasing,
                                   self.near, self.far, self.rasterizer_eps, (0, 0, 0))
+
+        return normal_map
+
+    def render_normal_map_from_obj(self, obj_path):
+        mesh = trimesh.load(obj_path)
+        mesh.faces = mesh.faces[:, [0, 2, 1]]
+        vertices = torch.tensor(mesh.vertices, dtype=torch.float32).unsqueeze(0).cuda()  # Add batch dimension
+        faces = torch.tensor(mesh.faces, dtype=torch.long).unsqueeze(0).cuda()   # Add batch dimension
+        face_normals = torch.tensor(mesh.face_normals, dtype=torch.float32).unsqueeze(0).cuda()   # Add batch dimension
+        face_normals = face_normals[:, :, None, None, None, :].expand(-1, -1, 3, 3, 3, -1)
+
+        # Map normals from [-1, 1] to [0, 1]
+        face_normals = (face_normals + 1) / 2
+
+        cam = torch.zeros(1, 3).cuda()
+        cam[:, 0] = 1.0
+        proj_verts = self.proj_func(vertices, cam)
+        # proj_verts[:, :, 1] *= -1
+        vertices = nr.look_at(proj_verts, self.eye)
+
+        faces = nr.vertices_to_faces(vertices, faces)
+        faces = faces.contiguous()
+        normal_map = nr.rasterize(faces, face_normals, self.image_size, self.anti_aliasing,
+                                  self.near, self.far, self.rasterizer_eps, (0, 0, 0))
+        # scene = trimesh.Scene()
+        # scene.add_geometry(mesh)
+
+        # camera = trimesh.scene.Camera(resolution=(self.image_size, self.image_size), fov=(60, 60))
+        # scene.camera = camera
+
+        # normal_map = scene.save_image(resolution=(self.image_size, self.image_size))
 
         return normal_map
 

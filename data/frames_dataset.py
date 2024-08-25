@@ -207,6 +207,7 @@ class FramesDataset(Dataset):
             out['video_rdr'] = video_rdr.transpose((3, 0, 1, 2))
             video_dp = np.array(depth_array, dtype='float32')
             video_dp = np.expand_dims(video_dp, axis=0)
+            out['video_dp'] = video_dp
             out['smpl_list'] = smpl_list
 
         out['name'] = video_name

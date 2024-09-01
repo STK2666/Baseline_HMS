@@ -95,6 +95,8 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
                     x['source_rdr'] = x['source_rdr'].cuda()
                     x['driving_smpl'] = x['driving_smpl'].cuda()
                     x['source_smpl'] = x['source_smpl'].cuda()
+                    x['driving_dp'] = x['driving_dp'].cuda()
+                    x['source_dp'] = x['source_dp'].cuda()
 
                 # ---------
                 # Generator

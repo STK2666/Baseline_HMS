@@ -1,11 +1,8 @@
 dataset_params:
-  root_dir: /disk1/dataset/iPER
+  root_dir: /ssd5/tongkai/iPER/iPER
   frame_shape: null
   id_sampling: False
   augmentation_params:
-    flip_param:
-      horizontal_flip: True
-      time_flip: True
     jitter_param:
       brightness: 0.1
       contrast: 0.1
@@ -14,49 +11,50 @@ dataset_params:
 
 model_params:
   common_params:
-    num_regions: 20
+    num_regions: 10
     num_channels: 3
     estimate_affine: True
     revert_axis_swap: True
     bg: True
   generator_params:
     block_expansion: 64
-    max_features: 512
-    num_down_blocks: 2
-    num_bottleneck_blocks: 6
+    max_features: 256
+    num_down_blocks: 3
+    num_bottleneck_blocks: 2
     skips: True
+    # mode: 'style_concat'
+    mode: 'conv_concat'
     pixelwise_flow_predictor_params:
       block_expansion: 64
-      max_features: 1024
-      num_blocks: 5
+      max_features: 256
+      num_blocks: 3
       scale_factor: 0.25
       use_deformed_source: True
       use_covar_heatmap: True
-      estimate_occlusion_map: True
   bg_predictor_params:
     block_expansion: 32
-    max_features: 1024
-    num_blocks: 5
+    max_features: 256
+    num_blocks: 3
     bg_type: 'affine'
   region_predictor_params:
     temperature: 0.1
     block_expansion: 32
-    max_features: 1024
+    max_features: 256
     scale_factor: 0.25
-    num_blocks: 5
+    num_blocks: 3
     pca_based: True
     pad: 0
     fast_svd: False
 
 train_params:
   num_epochs: 100
-  num_repeats: 15
+  num_repeats: 30
   epoch_milestones: [70, 90]
   lr_generator: 2.0e-4
-  batch_size: 24
-  scales: [1, 0.5, 0.25, 0.125]
+  batch_size: 8
+  scales: [1]
   dataloader_workers: 10
-  checkpoint_freq: 10
+  checkpoint_freq: 100
   bg_start: 0
   transform_params:
     sigma_affine: 0.05
@@ -64,8 +62,13 @@ train_params:
     points_tps: 5
   loss_weights:
     perceptual: [10, 10, 10, 10, 10]
-    equivariance_shift: 10
-    equivariance_affine: 10
+    style: [0.1, 0.1, 0.1, 0.1, 0.1]
+    l1: 50
+    adv: 5
+    face_gan: 5
+    face_l1: 5
+    equivariance_shift: 0
+    equivariance_affine: 0
 
 visualizer_params:
   kp_size: 5

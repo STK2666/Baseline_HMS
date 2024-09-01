@@ -27,7 +27,7 @@ def generate_video(config, inpainting_network, bg_predictor, dense_motion_networ
         with torch.no_grad():
             if torch.cuda.is_available():
                 x['video'] = x['video'].cuda()
-            length = 16
+            length = 12
             length_list = [length for i in range(math.ceil(x['video'].shape[2]/length))]
             if x['video'].shape[2] % length != 0:
                 length_list[-1] = x['video'].shape[2] % length

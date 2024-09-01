@@ -136,7 +136,8 @@ class FramesDataset(Dataset):
 
         video_name = os.path.basename(path)
         video_path = os.path.join(path, 'frames')
-        rendered_path = os.path.join(path, 'normal')
+        rendered_path = os.path.join(path, 'rendered')
+        # rendered_path = os.path.join(path, 'normal')
         json_path = os.path.join(path, 'kptsmpls')
         depth_path = os.path.join(path, 'depth')
         if self.is_train:

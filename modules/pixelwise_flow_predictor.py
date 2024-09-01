@@ -57,7 +57,8 @@ class PixelwiseFlowPredictor(nn.Module):
 
         # Geometry supervised flow
         self.renderer = SMPLRenderer(map_name="par")
-        self.smpl_model = SMPL('./SMPLDataset/checkpoints/smpl_model.pkl').eval()
+        self.smpl_model = SMPL('./SMPLDataset/checkpoints/basicModel_neutral_lbs_10_207_0_v1.0.0.pkl').eval()
+        # self.smpl_model = SMPL('./SMPLDataset/checkpoints/smpl_model.pkl').eval()
         self.smpl_model.requires_grad_(False)
         self.renderer.set_ambient_light()
 
@@ -169,6 +170,23 @@ class PixelwiseFlowPredictor(nn.Module):
             return cam, verts, kpts2d
         else:
             return cam, verts
+
+    # def get_verts(self, smpl_para, get_landmarks=False):
+    #     cam_nc = 3
+    #     pose_nc = 72
+    #     shape_nc = 10
+
+    #     cam = smpl_para[:, 0:cam_nc].contiguous()
+    #     pose = smpl_para[:, cam_nc:cam_nc + pose_nc].contiguous()
+    #     shape = smpl_para[:, -shape_nc:].contiguous()
+    #     # with torch.no_grad():
+    #     verts, kpts3d, _ = self.smpl_model(beta=shape, theta=pose, get_skin=True)
+    #     if get_landmarks:
+    #         X_trans = kpts3d[:, :, :2] + cam[:, None, 1:]
+    #         kpts2d = cam[:, None, 0:1] * X_trans
+    #         return cam, verts, kpts2d
+    #     else:
+    #         return cam, verts
 
     def get_smpl_flows(self, source_smpl, driving_smpl):
         cam_from, vert_from = self.get_verts(source_smpl)

@@ -105,7 +105,7 @@ def write_toml_file(toml_file, data_dict):
 def image_to_tensor(input, device):
     image = input.copy()
     image = np.transpose(image, (2, 0, 1))
-    image = image.astype(np.float) / 255
+    image = image.astype(np.float32) / 255
     image = torch.tensor(image).float()[None].to(device)
     return image
 

@@ -105,11 +105,11 @@ def render_process(frames, save_dir_visualization_frames,
             shape = smpls_results['shape'][None].float().to(device)
             verts, _, _ = smpl(beta=shape, theta=pose, get_skin=True)
 
-            # normal_map = render.render_normal_map(cams, verts)
-            # smpl_image = normal_map
+            normal_map = render.render_normal_map(cams, verts)
+            smpl_image = normal_map
 
-            depth_map = render.render_depth(cams, verts)
-            smpl_image = depth_map
+            # depth_map = render.render_depth(cams, verts)
+            # smpl_image = depth_map
 
             # rd_imgs, _ = render.render(cams, verts, texs)
             # sil = render.render_silhouettes(cams, verts)[:, None].contiguous()

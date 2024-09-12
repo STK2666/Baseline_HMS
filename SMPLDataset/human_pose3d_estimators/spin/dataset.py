@@ -10,7 +10,8 @@ __all__ = ["preprocess", "InferenceDatasetWithKeypoints", "InferenceDataset"]
 
 
 def resize_img(img, scale_factor):
-    new_size = (np.floor(np.array(img.shape[0:2]) * np.float(scale_factor))).astype(int)
+    new_size = (np.floor(np.array(img.shape[0:2]) * np.float32(scale_factor))).astype(int)
+    # new_size = (np.floor(np.array(img.shape[0:2]) * np.float(scale_factor))).astype(int)
     new_img = cv2.resize(img, (new_size[1], new_size[0]))
     # This is scale factor of [height, width] i.e. [y, x]
     actual_factor = [
@@ -46,7 +47,7 @@ def preprocess(img, boxes):
 
     image_scaled, scale_factors = resize_img(img, scale)
 
-    center_scaled = np.round(center * scale_factors).astype(np.int)
+    center_scaled = np.round(center * scale_factors).astype(int)
 
     # Make sure there is enough space to crop image_size x image_size.
     image_padded = np.pad(

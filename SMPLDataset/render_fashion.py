@@ -10,8 +10,8 @@ import render_process
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--video_dir", type=str, default="/ssd5/tongkai/BDMM/dataset/UBC_fashion_smpl", help="the root directory of dataset.")
-    parser.add_argument("--output_dir", type=str, default="/ssd5/tongkai/FashionVideo_normal", help="the root directory of dataset.")
+    parser.add_argument("--video_dir", type=str, default="/disk1/dataset/FashionVideo", help="the root directory of dataset.")
+    parser.add_argument("--output_dir", type=str, default="/disk1/dataset/FashionVideo", help="the root directory of dataset.")
     # parser.add_argument("--gpu_id", type=str, default="0", help="the gpu ids.")
     parser.add_argument("--workers", type=int, default=16, help="numbers of workers")
     parser.add_argument("--batch_size", type=int, default=320, help="numbers of batch size for SMPL")
@@ -35,11 +35,12 @@ if __name__ == "__main__":
     names = train_names + test_names
 
     for stage, name in tqdm(names):
-        save_dir_visualization_frames = os.path.join(args.output_dir, stage, name, 'depth')
-        # save_dir_visualization_frames = os.path.join(args.output_dir, stage, name, 'normal')
+        # save_dir_visualization_frames = os.path.join(args.output_dir, stage, name, 'depth')
+        save_dir_visualization_frames = os.path.join(args.output_dir, stage, name, 'normal_new')
+        # print(save_dir_visualization_frames)
         mkdirs(save_dir_visualization_frames)
 
-        frames_dir = os.path.join(args.video_dir, stage, name)
+        frames_dir = os.path.join(args.video_dir, stage, name, 'frames')
         frames = sorted(glob.glob(os.path.join(frames_dir, '*.png')))
         # print(frames)
         render_process.render_process(frames, save_dir_visualization_frames,

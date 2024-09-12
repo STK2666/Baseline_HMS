@@ -45,6 +45,8 @@ def generate_video(config, inpainting_network, bg_predictor, dense_motion_networ
                 driving = torch.randn((length_list[frame_idx],x['video'].shape[1],x['video'].shape[3],x['video'].shape[4]))
                 source_rdr = torch.randn((length_list[frame_idx],x['video'].shape[1],x['video'].shape[3],x['video'].shape[4]))
                 driving_rdr = torch.randn((length_list[frame_idx],x['video'].shape[1],x['video'].shape[3],x['video'].shape[4]))
+                source_depth = torch.randn((length_list[frame_idx],x['video_dp'].shape[1],x['video_dp'].shape[3],x['video_dp'].shape[4]))
+                driving_depth = torch.randn((length_list[frame_idx],x['video_dp'].shape[1],x['video_dp'].shape[3],x['video_dp'].shape[4]))
                 source_smpl = torch.randn((length_list[frame_idx],x['smpl_list'][0].shape[1],x['smpl_list'][0].shape[0]))
                 driving_smpl = torch.randn((length_list[frame_idx],x['smpl_list'][0].shape[1],x['smpl_list'][0].shape[0]))
 
@@ -53,6 +55,8 @@ def generate_video(config, inpainting_network, bg_predictor, dense_motion_networ
                     driving[i] = x['video'][:, :, frame_idx*length + i]
                     source_rdr[i] = x['video_rdr'][:, :, 0]
                     driving_rdr[i] = x['video_rdr'][:, :, frame_idx*length + i]
+                    source_depth[i] = x['video_dp'][:,:,0]
+                    driving_depth[i] = x['video_dp'][:, :, frame_idx*length + i]
                     source_smpl[i] = x['smpl_list'][0]
                     driving_smpl[i] = x['smpl_list'][frame_idx*length + i]
 
@@ -61,21 +65,24 @@ def generate_video(config, inpainting_network, bg_predictor, dense_motion_networ
                     driving = driving.cuda()
                     source_rdr = source_rdr.cuda()
                     driving_rdr = driving_rdr.cuda()
+                    source_depth = source_depth.cuda()
+                    driving_depth = driving_depth.cuda()
                     source_smpl = source_smpl.cuda()
                     driving_smpl = driving_smpl.cuda()
 
-                # bg_params = None
-                # if bg_predictor:
-                #     bg_params = bg_predictor(source, source_rdr, driving_rdr)
+                bg_params = None
+                if bg_predictor:
+                    bg_params = bg_predictor(source, source_rdr, driving_rdr)
 
                 source_region_params = dense_motion_network(source_rdr, source_smpl)
                 driving_region_params = dense_motion_network(driving_rdr, driving_smpl)
 
                 out = inpainting_network(source, source_region_params=source_region_params,
-                           driving_region_params=driving_region_params, bg=bg_predictor,
-                        #    driving_region_params=driving_region_params, bg_params=bg_params,
+                        #    driving_region_params=driving_region_params, bg=bg_predictor,
+                           driving_region_params=driving_region_params, bg_params=bg_params,
                            driving_smpl=driving_smpl, source_smpl=source_smpl,
-                           driving_smpl_rdr=driving_rdr, source_smpl_rdr=source_rdr)
+                           driving_smpl_rdr=driving_rdr, source_smpl_rdr=source_rdr,
+                           driving_depth=driving_depth, source_depth=source_depth)
                 prediction = out['prediction'].data.cpu().numpy()
 
                 for frame in range(prediction.shape[0]):

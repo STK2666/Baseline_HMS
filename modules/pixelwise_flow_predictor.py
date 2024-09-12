@@ -59,8 +59,10 @@ class PixelwiseFlowPredictor(nn.Module):
         self.smpl_model.requires_grad_(False)
         self.renderer.set_ambient_light()
 
-        gs_hourglass_in_features = (self.kpts + 1) * num_channels + num_channels
-        num_gsflow = self.kpts + 2
+        # gs_hourglass_in_features = (self.kpts + 1) * num_channels + num_channels
+        gs_hourglass_in_features = num_channels
+        # num_gsflow = self.kpts + 2
+        num_gsflow = 1
         self.gs_hourglass = Hourglass(block_expansion=block_expansion, in_features=gs_hourglass_in_features, max_features=max_features, num_blocks=num_blocks)
         self.gs_mask = nn.Conv2d(self.gs_hourglass.out_filters, num_gsflow, kernel_size=(7, 7), padding=(3, 3))
 
@@ -190,7 +192,7 @@ class PixelwiseFlowPredictor(nn.Module):
 
         driving_kpts = smpl2kpts(driving_smpl)
         source_kpts = smpl2kpts(source_smpl)
-        kpt_flow = self.get_kpt_flows(source_image, driving_kpts, source_kpts)
+        # kpt_flow = self.get_kpt_flows(source_image, driving_kpts, source_kpts)
 
         driving_heatmap = kpt2heatmap((driving_kpts+1)/2, spatial_size=(H,W),sigma=3.0)
         source_heatmap = kpt2heatmap((source_kpts+1)/2, spatial_size=(H,W),sigma=3.0)
@@ -224,11 +226,11 @@ class PixelwiseFlowPredictor(nn.Module):
             delta_heatmap = driving_heatmap - source_heatmap
             delta_normal = driving_smpl_rdr - source_smpl_rdr
             uns_input = torch.cat([heatmap_representation, uns_warped], dim=2) # region_heatmaps and deformed_source_features
+            uns_input = uns_input.view(bs, -1, h, w)
+            uns_input = torch.cat([uns_input, delta_depth, delta_heatmap, delta_normal], dim=1)
         else:
             uns_input = heatmap_representation
 
-        uns_input = uns_input.view(bs, -1, h, w)
-        uns_input = torch.cat([uns_input, delta_depth, delta_heatmap, delta_normal], dim=1)
         uns_prediction = self.uns_hourglass(uns_input)
 
         uns_mask = self.uns_mask(uns_prediction)
@@ -238,16 +240,18 @@ class PixelwiseFlowPredictor(nn.Module):
 
 
         # geometry supervised flow
-        kpt_warped = self.get_deformed(source_ori, kpt_flow)
-        kpt_warped = kpt_warped.view(bs, -1, H, W)
-        gs_input = torch.cat([smpl_warped,kpt_warped], dim=1)
+        # kpt_warped = self.get_deformed(source_ori, kpt_flow)
+        # kpt_warped = kpt_warped.view(bs, -1, H, W)
+        # gs_input = torch.cat([smpl_warped,kpt_warped], dim=1)
+        gs_input = smpl_warped
         gs_prediction = self.gs_hourglass(gs_input)
         gs_mask = self.gs_mask(gs_prediction)
         gs_mask = F.softmax(gs_mask, dim=1)
         gs_mask = gs_mask.unsqueeze(2)
-        kpt_flow = kpt_flow.permute(0, 1, 4, 2, 3)
+        # kpt_flow = kpt_flow.permute(0, 1, 4, 2, 3)
         smpl_flow = smpl_flow.unsqueeze(1).permute(0, 1, 4, 2, 3)
-        gs_flow_fine = torch.cat([kpt_flow, smpl_flow], dim=1)
+        # gs_flow_fine = torch.cat([kpt_flow, smpl_flow], dim=1)
+        gs_flow_fine = smpl_flow
         gs_flow_fine = (gs_flow_fine * gs_mask).sum(dim=1)
 
 

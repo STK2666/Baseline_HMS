@@ -117,6 +117,7 @@ class Generator(nn.Module):
 
         deformed_image = self.deform_input(source_image, motion_params['optical_flow'])
         output_dict["deformed"] = deformed_image
+        output_dict['driving_smpl_rdr'] = driving_smpl_rdr
         occlusion_map = motion_params['occlusion_map']
         if deformed_image.shape[2] != motion_params['occlusion_map'].shape[2] or deformed_image.shape[3] != motion_params['occlusion_map'].shape[3]:
             occlusion_map = F.interpolate(occlusion_map, size=deformed_image.shape[2:], mode='bilinear')

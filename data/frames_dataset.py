@@ -136,10 +136,12 @@ class FramesDataset(Dataset):
 
         video_name = os.path.basename(path)
         video_path = os.path.join(path, 'frames')
-        rendered_path = os.path.join(path, 'rendered')
-        # rendered_path = os.path.join(path, 'normal')
+        # rendered_path = os.path.join(path, 'rendered')
+        rendered_path = os.path.join(path, 'new_normal')
+        # rendered_path = os.path.join(path, 'new_normal_notmp').replace('/ssd5/tongkai/FashionVideo', '/ssd5/tongkai/dataset/FashionVideo')
         json_path = os.path.join(path, 'kptsmpls')
-        depth_path = os.path.join(path, 'depth')
+        depth_path = os.path.join(path, 'new_depth')
+        # depth_path = os.path.join(path, 'new_depth_notmp').replace('/ssd5/tongkai/FashionVideo', '/ssd5/tongkai/dataset/FashionVideo')
         if self.is_train:
             frames = os.listdir(video_path)
             frames.sort()

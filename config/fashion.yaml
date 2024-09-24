@@ -53,7 +53,7 @@ train_params:
   lr_generator: 2.0e-4
   batch_size: 8
   scales: [1]
-  dataloader_workers: 8
+  dataloader_workers: 4
   checkpoint_freq: 100
   bg_start: 0
   transform_params:
@@ -65,8 +65,9 @@ train_params:
     style: [0.1, 0.1, 0.1, 0.1, 0.1]
     l1: 50
     adv: 5
-    face_gan: 5
-    face_l1: 5
+    # face_gan: 5
+    # face_l1: 5
+    warp: 0
     equivariance_shift: 0
     equivariance_affine: 0
 

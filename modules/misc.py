@@ -146,11 +146,8 @@ def discriminator_loss_func(real_pred, fake_pred, weight=1.0):
 
     criterion = nn.BCELoss()
 
-    real_target = torch.tensor(1.0).expand_as(real_pred)
-    fake_target = torch.tensor(0.0).expand_as(fake_pred)
-    if torch.cuda.is_available():
-        real_target = real_target.cuda()
-        fake_target = fake_target.cuda()
+    real_target = torch.ones_like(real_pred)
+    fake_target = torch.zeros_like(fake_pred)
 
     loss_adversarial = criterion(real_pred, real_target) + criterion(fake_pred, fake_target)
 

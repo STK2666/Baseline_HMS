@@ -45,7 +45,7 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
     optimizer_discriminator = None
     if train_params['loss_weights']['adv'] != 0:
         # discriminator = Discriminator(image_in_channels=3, edge_in_channels=2).to(next(dense_motion_network.parameters()).device)
-        discriminator = Discriminator(config['model_params']['common_params']['num_channels']).to(next(dense_motion_network.parameters()).device)
+        discriminator = Discriminator(in_channels=config['model_params']['common_params']['num_channels']*2).to(next(dense_motion_network.parameters()).device)
         optimizer_discriminator = torch.optim.Adam(
             [{'params':discriminator.parameters(),'initial_lr': train_params['lr_generator']*0.1}],
             lr=train_params['lr_generator']*0.1, betas=(0.5, 0.999), weight_decay = 1e-4)
@@ -87,7 +87,7 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
             if bg_predictor:
                 bg_predictor.train()
 
-            for x in tqdm(dataloader):
+            for x in tqdm(dataloader, ncols=80):
                 if(torch.cuda.is_available()):
                     x['driving'] = x['driving'].cuda()
                     x['source'] = x['source'].cuda()
@@ -113,9 +113,9 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
                 loss = sum(loss_values)
                 loss.backward()
 
-                clip_grad_norm_(dense_motion_network.parameters(), max_norm=10, norm_type = math.inf)
+                clip_grad_norm_(dense_motion_network.parameters(), max_norm=10, norm_type=math.inf)
                 if bg_predictor and epoch>=bg_start:
-                    clip_grad_norm_(bg_predictor.parameters(), max_norm=10, norm_type = math.inf)
+                    clip_grad_norm_(bg_predictor.parameters(), max_norm=10, norm_type=math.inf)
 
                 optimizer.step()
                 optimizer.zero_grad()
@@ -133,15 +133,18 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
                 if discriminator:
                     requires_grad(discriminator, True)
 
-                    real_pred = discriminator(x['driving'])
-                    fake_pred = discriminator(generated['prediction'].detach())
+                    real_inputs = torch.cat([x['driving'], x['driving']], dim=1)
+                    fake_inputs = torch.cat([x['driving'], generated['prediction'].detach()], dim=1)
+
+                    real_pred = discriminator(real_inputs)
+                    fake_pred = discriminator(fake_inputs)
 
                     losses_discriminator = discriminator_loss_func(real_pred, fake_pred, weight=train_params['loss_weights']['adv'])
                     loss_values = [val.mean() for val in losses_discriminator.values()]
                     discriminator_loss = sum(loss_values)
                     discriminator_loss.backward()
 
-                    clip_grad_norm_(discriminator.parameters(), max_norm=10, norm_type = math.inf)
+                    clip_grad_norm_(discriminator.parameters(), max_norm=10, norm_type=math.inf)
                     optimizer_discriminator.step()
                     optimizer_discriminator.zero_grad()
 

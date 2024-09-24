@@ -217,12 +217,17 @@ class GeneratorFullModel(torch.nn.Module):
         # adversarial loss
         if self.loss_weights['adv'] != 0:
             criterion = nn.BCELoss()
-            fake_pred = self.discriminator(generated['prediction'])
+            fake_inputs = torch.cat([x['driving'], generated['prediction']], dim=1)
+            fake_pred = self.discriminator(fake_inputs)
 
             real_target = torch.tensor(1.0).expand_as(fake_pred).to(fake_pred.device)
             loss_adversarial = criterion(fake_pred, real_target)
             loss_values['adv'] = self.loss_weights['adv'] * loss_adversarial
 
+        # warping loss
+        if self.loss_weights['warp'] != 0:
+            value = torch.abs(x['driving'] - generated['deformed']).mean()
+            loss_values['warp'] = self.loss_weights['warp'] * value
 
         return loss_values, generated
 

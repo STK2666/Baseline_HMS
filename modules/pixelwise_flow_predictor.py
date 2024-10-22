@@ -11,7 +11,8 @@ from torch import nn
 import torch.nn.functional as F
 import torch
 
-from modules.util import Hourglass, AntiAliasInterpolation2d, make_coordinate_grid, region2gaussian, kpt2heatmap
+from modules.util import Hourglass, Comb_Hourglass
+from modules.util import AntiAliasInterpolation2d, make_coordinate_grid, region2gaussian, kpt2heatmap
 from modules.util import to_homogeneous, from_homogeneous
 from modules.new_conv import SMPLConv
 from utils.pose_utils import smpl2kpts
@@ -48,12 +49,13 @@ class PixelwiseFlowPredictor(nn.Module):
         # uns_hourglass = Hourglass(block_expansion=block_expansion, in_features=depth_channel+normal_channel+heatmap_channel, max_features=max_features, num_blocks=num_blocks)
         # self.uns_flow = nn.Sequential(uns_hourglass, nn.Conv2d(uns_hourglass.out_filters, 2, kernel_size=(7, 7), padding=(3, 3)))
 
-        uns_hourglass_in_features = (num_regions + 1) * (num_channels * use_deformed_source + 1)
+        uns_hourglass_in_features = (num_regions + 1) * num_channels
+        # uns_hourglass_in_features = (num_regions + 1) * (num_channels * use_deformed_source + 1)
         # uns_hourglass_in_features = (num_regions + 1) * (num_channels * use_deformed_source + 1) + depth_channel + heatmap_channel + normal_channel
-        self.uns_hourglass = Hourglass(block_expansion=block_expansion, in_features=uns_hourglass_in_features, max_features=max_features, num_blocks=num_blocks)
+        self.uns_hourglass = Hourglass(block_expansion=block_expansion, in_features=uns_hourglass_in_features, max_features=max_features, num_blocks=num_blocks, with_mid=True)
         num_unsflow = num_regions + 1
-        # self.uns_mask = nn.Conv2d(self.uns_hourglass.out_filters, num_unsflow, kernel_size=(7, 7), padding=(3, 3))
-        self.uns_mask = SMPLConv(self.uns_hourglass.out_filters, num_unsflow, kernel_size=7)
+        self.uns_mask = nn.Conv2d(self.uns_hourglass.out_filters, num_unsflow, kernel_size=(7, 7), padding=(3, 3))
+        # self.uns_mask = SMPLConv(self.uns_hourglass.out_filters, num_unsflow, kernel_size=7)
 
         # Geometry supervised flow
         self.renderer = SMPLRenderer(map_name="par")
@@ -62,20 +64,23 @@ class PixelwiseFlowPredictor(nn.Module):
         self.smpl_model.requires_grad_(False)
         self.renderer.set_ambient_light()
 
-        gs_hourglass_in_features = (self.kpts + 2) * num_channels + depth_channel + heatmap_channel + normal_channel
+        # gs_hourglass_in_features = (self.kpts + 2) * num_channels + heatmap_channel
+        gs_hourglass_in_features = (self.kpts + 2) * num_channels
         num_gsflow = self.kpts + 2
-        self.gs_hourglass = Hourglass(block_expansion=block_expansion, in_features=gs_hourglass_in_features, max_features=max_features, num_blocks=num_blocks)
-        # self.gs_mask = nn.Conv2d(self.gs_hourglass.out_filters, num_gsflow, kernel_size=(7, 7), padding=(3, 3))
-        self.gs_mask = SMPLConv(self.gs_hourglass.out_filters, num_gsflow, kernel_size=7)
+        self.gs_hourglass = Hourglass(block_expansion=block_expansion, in_features=gs_hourglass_in_features, max_features=max_features, num_blocks=num_blocks, with_mid=True)
+        self.gs_mask = nn.Conv2d(self.gs_hourglass.out_filters, num_gsflow, kernel_size=(7, 7), padding=(3, 3))
+        # self.gs_mask = SMPLConv(self.gs_hourglass.out_filters, num_gsflow, kernel_size=7)
 
 
         # Combination of unsupervised and geometry supervised flow
-        total_hourglass_features = self.uns_hourglass.out_filters + self.gs_hourglass.out_filters
-        # self.combine_mask = nn.Conv2d(total_hourglass_features, 1, kernel_size=(7, 7), padding=(3, 3))
-        self.combine_mask = SMPLConv(total_hourglass_features, 1, kernel_size=7)
+        # total_hourglass_features = self.uns_hourglass.out_filters + self.gs_hourglass.out_filters
+        combine_in_features = (num_channels + depth_channel + normal_channel) * 2
+        self.combine_net = Comb_Hourglass(block_expansion=block_expansion, in_features=combine_in_features, max_features=max_features, num_blocks=num_blocks)
+        self.combine_mask = nn.Conv2d(self.combine_net.out_filters, 1, kernel_size=(7, 7), padding=(3, 3))
+        # self.combine_mask = SMPLConv(self.combine_net.out_filters, 1, kernel_size=7)
 
-        # self.occlusion = nn.Conv2d(total_hourglass_features, 1, kernel_size=(7, 7), padding=(3, 3))
-        self.occlusion = SMPLConv(total_hourglass_features, 1, kernel_size=7)
+        self.occlusion = nn.Conv2d(self.combine_net.out_filters, 1, kernel_size=(7, 7), padding=(3, 3))
+        # self.occlusion = SMPLConv(self.combine_net.out_filters, 1, kernel_size=7)
 
 
     def get_heatmap_representations(self, source_image, driving_region_params, source_region_params):
@@ -215,62 +220,47 @@ class PixelwiseFlowPredictor(nn.Module):
             source_smpl_rdr = F.interpolate(source_smpl_rdr, scale_factor=self.scale_factor, mode='bilinear')
             driving_smpl_rdr = F.interpolate(driving_smpl_rdr, scale_factor=self.scale_factor, mode='bilinear')
 
-            delta_depth = driving_depth - source_depth
-            delta_heatmap = driving_heatmap - source_heatmap
-            delta_normal = driving_smpl_rdr - source_smpl_rdr
+            # delta_depth = driving_depth - source_depth
+            # delta_heatmap = driving_heatmap - source_heatmap
+            # delta_normal = driving_smpl_rdr - source_smpl_rdr
 
         bs, _, h, w = source_image.shape
         # unsupervised flow
-        heatmap_representation = self.get_heatmap_representations(source_image, driving_region_params, source_region_params)
+        # heatmap_representation = self.get_heatmap_representations(source_image, driving_region_params, source_region_params)
         uns_flow_coarse = self.get_motion_params_flows(source_image, driving_region_params, source_region_params, bg_params=bg_params)
         uns_warped = self.get_deformed(source_image, uns_flow_coarse)
         uns_flow_coarse = uns_flow_coarse.permute(0, 1, 4, 2, 3)
-        if self.use_deformed_source:
-            uns_input = torch.cat([heatmap_representation, uns_warped], dim=2) # region_heatmaps and deformed_source_features
-            uns_input = uns_input.view(bs, -1, h, w)
-            # uns_input = torch.cat([uns_input, delta_depth, delta_heatmap, delta_normal], dim=1)
-        else:
-            uns_input = heatmap_representation
+        # if self.use_deformed_source:
+            # uns_input = torch.cat([heatmap_representation, uns_warped], dim=2) # region_heatmaps and deformed_source_features
+            # uns_input = uns_input.view(bs, -1, h, w)
+        # else:
+            # uns_input = heatmap_representation
+        uns_input = uns_warped.view(bs, -1, h, w)
 
         uns_prediction = self.uns_hourglass(uns_input)
+        uns_mid = self.uns_hourglass.mid
 
-        uns_mask = self.uns_mask(uns_prediction, smpl)
+        uns_mask = self.uns_mask(uns_prediction)
+        # uns_mask = self.uns_mask(uns_prediction, smpl)
         uns_mask = F.softmax(uns_mask, dim=1)
         uns_mask = uns_mask.unsqueeze(2)
         uns_flow_coarse = (uns_flow_coarse * uns_mask).sum(dim=1)
         uns_flow_fine = F.interpolate(uns_flow_coarse, size=(H,W), mode='bilinear')
-        # uns_prediction = F.interpolate(uns_prediction, size=(H,W), mode='bilinear')
-        # uns_warped = F.grid_sample(source_ori, uns_flow_fine.permute(0, 2, 3, 1))
         uns_warped = F.grid_sample(source_ori, uns_flow_fine.permute(0, 2, 3, 1))
         out_dict['coarse_deformed'] = uns_warped
-
-        # # geometry supervised flow
-        # kpt_warped = self.get_deformed(source_ori, kpt_flow)
-        # kpt_warped = kpt_warped.view(bs, -1, H, W)
-        # out_dict['kpt_warped'] = kpt_warped
-        # smpl_warped = F.grid_sample(source_ori, smpl_flow) * smpl_mask
-        # out_dict['smpl_warped'] = smpl_warped
-        # gs_input = torch.cat([smpl_warped,kpt_warped], dim=1)
-        # gs_prediction = self.gs_hourglass(gs_input)
-        # gs_mask = self.gs_mask(gs_prediction, smpl)
-        # gs_mask = F.softmax(gs_mask, dim=1)
-        # gs_mask = gs_mask.unsqueeze(2)
-        # kpt_flow = kpt_flow.permute(0, 1, 4, 2, 3)
-        # smpl_flow = smpl_flow.unsqueeze(1).permute(0, 1, 4, 2, 3)
-        # gs_flow_fine = torch.cat([kpt_flow, smpl_flow], dim=1)
-        # gs_flow_fine = (gs_flow_fine * gs_mask).sum(dim=1)
-        # out_dict['fine_deformed'] = F.grid_sample(source_ori, gs_flow_fine.permute(0, 2, 3, 1))
 
         # geometry supervised flow
         kpt_warped = self.get_deformed(source_ori, kpt_flow)
         kpt_warped = kpt_warped.view(bs, -1, H, W)
         kpt_warped_coarse = F.interpolate(kpt_warped, size=(h,w), mode='bilinear')
-        # smpl_warped = F.grid_sample(source_ori, smpl_flow) * smpl_mask
-        # out_dict['smpl_warped'] = smpl_warped
         smpl_warped_coarse = F.interpolate(smpl_warped, size=(h,w), mode='bilinear')
-        gs_input = torch.cat([smpl_warped_coarse, kpt_warped_coarse, delta_depth, delta_normal, delta_heatmap], dim=1)
+        gs_input = torch.cat([smpl_warped_coarse, kpt_warped_coarse], dim=1)
+        # gs_input = torch.cat([smpl_warped_coarse, kpt_warped_coarse, delta_heatmap], dim=1)
         gs_prediction = self.gs_hourglass(gs_input)
-        gs_mask = self.gs_mask(gs_prediction, smpl)
+        gs_mid = self.gs_hourglass.mid
+
+        gs_mask = self.gs_mask(gs_prediction)
+        # gs_mask = self.gs_mask(gs_prediction, smpl)
         gs_mask = F.softmax(gs_mask, dim=1)
         gs_mask = F.interpolate(gs_mask, size=(H,W), mode='bilinear')
         gs_mask = gs_mask.unsqueeze(2)
@@ -279,28 +269,28 @@ class PixelwiseFlowPredictor(nn.Module):
         smpl_flow = smpl_flow.unsqueeze(1).permute(0, 1, 4, 2, 3)
         gs_flow_fine = torch.cat([kpt_flow, smpl_flow], dim=1)
         gs_flow_fine = (gs_flow_fine * gs_mask).sum(dim=1)
-        # gs_flow_coarse = gs_flow_fine.reshape(bs, -1, H, W)
-        # gs_flow_coarse = F.interpolate(gs_flow_coarse, size=(h,w), mode='bilinear').reshape(bs, -1, 2, h, w)
-        # gs_flow_coarse = (gs_flow_coarse * gs_mask).sum(dim=1)
-        # gs_flow_fine = F.interpolate(gs_flow_coarse, size=(H,W), mode='bilinear')
         out_dict['fine_deformed'] = F.grid_sample(source_ori, gs_flow_fine.permute(0, 2, 3, 1))
 
         # combine unsupervised and geometry supervised flow
-        combined_inputs = torch.cat([uns_prediction, gs_prediction], dim=1)
-        combined_mask = self.combine_mask(combined_inputs, smpl)
+        coarse_warped = torch.cat([out_dict['coarse_deformed'], out_dict['fine_deformed']], dim=1)
+        coarse_warped = F.interpolate(coarse_warped, size=(h,w), mode='bilinear')
+        combined_inputs = torch.cat([coarse_warped, driving_depth, source_depth, driving_smpl_rdr, source_smpl_rdr], dim=1)
+        # combined_inputs = torch.cat([coarse_warped, driving_depth, source_depth, driving_smpl_rdr, source_smpl_rdr, driving_heatmap, source_heatmap], dim=1)
+        combined_outputs = self.combine_net(combined_inputs, uns_mid, gs_mid, smpl)
+
+        combined_mask = self.combine_mask(combined_outputs)
+        # combined_mask = self.combine_mask(combined_outputs, smpl_tensor)
         combined_mask = torch.sigmoid(combined_mask)
         combined_mask = F.interpolate(combined_mask, size=(H, W), mode='bilinear')
-        # combined_flow = uns_flow_coarse * combined_mask + gs_flow_coarse * (1 - combined_mask)
         combined_flow = uns_flow_fine * combined_mask + gs_flow_fine * (1 - combined_mask)
         combined_flow = combined_flow.permute(0, 2, 3, 1)
         out_dict['optical_flow'] = combined_flow
         combined_mask = F.interpolate(combined_mask, size=(H, W), mode='bilinear')
         out_dict['combined_mask'] = combined_mask
 
-
-        occlusion_map = torch.sigmoid(self.occlusion(combined_inputs, smpl))
+        occlusion_map = torch.sigmoid(self.occlusion(combined_outputs))
+        # occlusion_map = torch.sigmoid(self.occlusion(combined_outputs, smpl_tensor))
         occlusion_map = F.interpolate(occlusion_map, size=(H, W), mode='bilinear')
-        # print(occlusion_map.shape)
         out_dict['occlusion_map'] = occlusion_map
 
         return out_dict

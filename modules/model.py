@@ -170,8 +170,10 @@ class GeneratorFullModel(torch.nn.Module):
                 self.vgg = self.vgg.cuda()
 
     def forward(self, x):
-        source_region_params = self.region_predictor(x['source_rdr'], x['source_smpl'])
-        driving_region_params = self.region_predictor(x['driving_rdr'], x['driving_smpl'])
+        source_region_in = torch.cat([x['source_rdr'], x['source_dp']], dim=1)
+        driving_region_in = torch.cat([x['driving_rdr'], x['driving_dp']], dim=1)
+        source_region_params = self.region_predictor(source_region_in, x['source_smpl'])
+        driving_region_params = self.region_predictor(driving_region_in, x['driving_smpl'])
 
         bg_params = self.bg_predictor(x['source'], x['source_rdr'], x['driving_rdr']) if self.bg_predictor else None
         generated = self.generator(x['source'], source_region_params=source_region_params, driving_region_params=driving_region_params, bg_params=bg_params,
@@ -185,49 +187,51 @@ class GeneratorFullModel(torch.nn.Module):
         pyramide_real = self.pyramid(x['driving'])
         pyramide_generated = self.pyramid(generated['prediction'])
 
-        # reconstruction loss
-        if sum(self.loss_weights['perceptual']) != 0:
-            value_total = 0
+        # perceptual loss , style loss and CX loss
+        if sum(self.loss_weights['perceptual']) != 0 or sum(self.loss_weights['style']) != 0 or self.loss_weights['l1'] != 0:
+            value_total_per = 0
+            value_total_style = 0
+            value_total_l1 = 0
             for scale in self.scales:
                 x_vgg = self.vgg(pyramide_generated['prediction_' + str(scale)])
                 y_vgg = self.vgg(pyramide_real['prediction_' + str(scale)])
 
-                for i, weight in enumerate(self.loss_weights['perceptual']):
-                    value = torch.abs(x_vgg[i] - y_vgg[i].detach()).mean()
-                    value_total += self.loss_weights['perceptual'][i] * value
-            value_total = value_total * (4/len(self.scales))
-            loss_values['perceptual'] = value_total
+                if sum(self.loss_weights['perceptual']) != 0:
+                    for i, weight in enumerate(self.loss_weights['perceptual']):
+                        value = torch.abs(x_vgg[i] - y_vgg[i].detach()).mean()
+                        value_total_per += weight * value
 
-        # style loss
-        if sum(self.loss_weights['style']) != 0:
-            value_total = 0
-            x_vgg = self.vgg(pyramide_generated['prediction_' + str(scale)])
-            y_vgg = self.vgg(pyramide_real['prediction_' + str(scale)])
+                if sum(self.loss_weights['style']) != 0:
+                    for i, weight in enumerate(self.loss_weights['style']):
+                        value = torch.abs(gram_matrix(x_vgg[i]) - gram_matrix(y_vgg[i].detach())).mean()
+                        value_total_style += weight * value
 
-            for i, weight in enumerate(self.loss_weights['style']):
-                value = torch.abs(gram_matrix(x_vgg[i]) - gram_matrix(y_vgg[i].detach())).mean()
-                value_total += weight * value
-            loss_values['style'] = value_total
+                if self.loss_weights['l1'] != 0:
+                    driving = F.interpolate(x['driving'], size=pyramide_generated['prediction_' + str(scale)].shape[2:], mode='bilinear')
+                    value = torch.abs(driving - pyramide_generated['prediction_' + str(scale)]).mean()
+                    value_total_l1 += self.loss_weights['l1'] * value
 
-        # L1 loss
-        if self.loss_weights['l1'] != 0:
-            value = torch.abs(x['driving'] - generated['prediction']).mean()
-            loss_values['l1'] = self.loss_weights['l1'] * value
-
+            if sum(self.loss_weights['perceptual']) != 0:
+                loss_values['perceptual'] = value_total_per * 4 / len(self.scales)
+            if sum(self.loss_weights['style']) != 0:
+                loss_values['style'] = value_total_style * 4 / len(self.scales)
+            if self.loss_weights['l1'] != 0:
+                loss_values['l1'] = value_total_l1 / len(self.scales)
+        # # L1 loss
+        # if self.loss_weights['l1'] != 0:
+        #     value = torch.abs(x['driving'] - generated['prediction']).mean()
+        #     # value += torch.abs(x['driving'] - generated['deformed']).mean()
+        #     loss_values['l1'] = self.loss_weights['l1'] * value
         # adversarial loss
         if self.loss_weights['adv'] != 0:
-            criterion = nn.BCELoss()
+            criterion = nn.MSELoss()
+            # criterion = nn.BCELoss()
             fake_inputs = torch.cat([x['driving'], generated['prediction']], dim=1)
             fake_pred = self.discriminator(fake_inputs)
 
             real_target = torch.tensor(1.0).expand_as(fake_pred).to(fake_pred.device)
             loss_adversarial = criterion(fake_pred, real_target)
             loss_values['adv'] = self.loss_weights['adv'] * loss_adversarial
-
-        # warping loss
-        if self.loss_weights['warp'] != 0:
-            value = torch.abs(x['driving'] - generated['deformed']).mean()
-            loss_values['warp'] = self.loss_weights['warp'] * value
 
         return loss_values, generated
 

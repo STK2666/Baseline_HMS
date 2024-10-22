@@ -144,7 +144,8 @@ def sample_data(loader):
 
 def discriminator_loss_func(real_pred, fake_pred, weight=1.0):
 
-    criterion = nn.BCELoss()
+    criterion = nn.MSELoss()
+    # criterion = nn.BCELoss()
 
     real_target = torch.ones_like(real_pred)
     fake_target = torch.zeros_like(fake_pred)

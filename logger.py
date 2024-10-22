@@ -36,9 +36,22 @@ class Logger:
         self.loss_list = []
         self.log_file.flush()
 
-    def visualize_rec(self, inp, out):
+    def log_iter_scores(self, loss_names, iter):
+        loss_mean = np.array(self.loss_list).mean(axis=0)
+
+        loss_string = "; ".join(["%s - %.5f" % (name, value) for name, value in zip(loss_names, loss_mean)])
+        loss_string = 'iter ' + str(iter).zfill(self.zfill_num) + ": " + loss_string
+
+        print(loss_string, file=self.log_file)
+        self.log_file.flush()
+
+    def visualize_rec(self, inp, out, iter=0):
         image = self.visualizer.visualize(inp['driving'], inp['source'], inp['driving_rdr'], inp['source_rdr'], out)
-        imageio.imsave(os.path.join(self.visualizations_dir, "%s-rec.png" % str(self.epoch).zfill(self.zfill_num)), image)
+        if iter != 0:
+            os.makedirs(os.path.join(self.visualizations_dir, 'first_iter'), exist_ok=True)
+            imageio.imsave(os.path.join(self.visualizations_dir, 'first_iter', "%s.png" % str(iter).zfill(self.zfill_num)), image)
+        else:
+            imageio.imsave(os.path.join(self.visualizations_dir, "%s-rec.png" % str(self.epoch).zfill(self.zfill_num)), image)
 
     def save_cpk(self, emergent=False):
         cpk = {k: v.state_dict() for k, v in self.models.items()}
@@ -83,10 +96,13 @@ class Logger:
             self.save_cpk()
         self.log_file.close()
 
-    def log_iter(self, losses):
+    def log_iter(self, losses, iter=0):
         losses = collections.OrderedDict(losses.items())
         self.names = list(losses.keys())
         self.loss_list.append(list(losses.values()))
+        if self.epoch == 0:
+            if iter < 5 or iter % 100 == 0:
+                self.log_iter_scores(self.names, iter=iter)
 
     def log_epoch(self, epoch, models, inp, out):
         self.epoch = epoch

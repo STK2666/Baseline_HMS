@@ -4,7 +4,8 @@ import torch
 import random
 import numpy as np
 
-seed = 54321
+# seed = 54321
+seed = 12345678
 
 torch.manual_seed(seed)
 torch.cuda.manual_seed(seed)
@@ -67,7 +68,7 @@ if __name__ == "__main__":
         inpainting.cuda()
 
     region_predictor = RegionPredictor(num_regions=config['model_params']['common_params']['num_regions'],
-                                       num_channels=config['model_params']['common_params']['num_channels'],
+                                       num_channels=config['model_params']['common_params']['region_channels'],
                                        estimate_affine=config['model_params']['common_params']['estimate_affine'],
                                               **config['model_params']['region_predictor_params'])
 

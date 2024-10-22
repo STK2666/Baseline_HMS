@@ -5,7 +5,7 @@ from logger import Logger
 
 from modules.model import GeneratorFullModel
 from modules.misc import requires_grad, discriminator_loss_func, image_to_edge_tensor
-from modules.discriminator.discriminator import Discriminator
+from modules.discriminator.discriminator import Discriminator, ResDiscriminator
 
 from torch.optim.lr_scheduler import MultiStepLR, LambdaLR
 from torch.nn.utils import clip_grad_norm_
@@ -46,6 +46,7 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
     if train_params['loss_weights']['adv'] != 0:
         # discriminator = Discriminator(image_in_channels=3, edge_in_channels=2).to(next(dense_motion_network.parameters()).device)
         discriminator = Discriminator(in_channels=config['model_params']['common_params']['num_channels']*2).to(next(dense_motion_network.parameters()).device)
+        # discriminator = ResDiscriminator(input_nc=config['model_params']['common_params']['num_channels']*2).to(next(dense_motion_network.parameters()).device)
         optimizer_discriminator = torch.optim.Adam(
             [{'params':discriminator.parameters(),'initial_lr': train_params['lr_generator']*0.1}],
             lr=train_params['lr_generator']*0.1, betas=(0.5, 0.999), weight_decay = 1e-4)
@@ -68,7 +69,7 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
     if 'num_repeats' in train_params or train_params['num_repeats'] != 1:
         dataset = DatasetRepeater(dataset, train_params['num_repeats'])
     dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True,
-                            num_workers=train_params['dataloader_workers'], drop_last=True)
+                            num_workers=train_params['dataloader_workers'], drop_last=False)
 
     generator_full = GeneratorFullModel(bg_predictor, dense_motion_network, inpainting_network, train_params, discriminator=discriminator)
 
@@ -79,15 +80,18 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
 
     with Logger(log_dir=log_dir, visualizer_params=config['visualizer_params'],
                 checkpoint_freq=train_params['checkpoint_freq']) as logger:
-        for epoch in trange(start_epoch, train_params['num_epochs']):
+        for epoch in trange(start_epoch, train_params['num_epochs'], ncols=80):
             losses = {}
+            losses_list = []
 
             inpainting_network.train()
             dense_motion_network.train()
             if bg_predictor:
                 bg_predictor.train()
 
+            iter = 0
             for x in tqdm(dataloader, ncols=80):
+                iter += 1
                 if(torch.cuda.is_available()):
                     x['driving'] = x['driving'].cuda()
                     x['source'] = x['source'].cuda()
@@ -152,7 +156,10 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
                 losses = {key: value.mean().detach().data.cpu().numpy() for key, value in losses_generator.items()}
                 if discriminator:
                     losses.update({key: value.mean().detach().data.cpu().numpy() for key, value in losses_discriminator.items()})
-                logger.log_iter(losses=losses)
+                losses_list.append(losses)
+                logger.log_iter(losses=losses, iter=iter)
+                if iter % 100 == 0 and epoch == 0:
+                    logger.visualize_rec(x, generated, iter=iter)
 
             scheduler_optimizer.step()
             if bg_predictor:
@@ -166,10 +173,37 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
             if bg_predictor and epoch>=bg_start:
                 model_save['bg_predictor'] = bg_predictor
                 model_save['optimizer_bg_predictor'] = optimizer_bg_predictor
+            if discriminator:
+                model_save['discriminator'] = discriminator
+                model_save['optimizer_discriminator'] = optimizer_discriminator
 
             logger.log_epoch(epoch, model_save, inp=x, out=generated)
 
-            # metric
+            # # metric
+            # with torch.no_grad():
+            #     l1_metric = torch.abs(x['driving'] - generated['prediction']).mean().cpu().numpy()
+            #     losses['L1'] = l1_metric
+            #     ssim_metric = ssim(x['driving'], generated['prediction'], data_range=1).mean().cpu().numpy()
+            #     losses['SSIM'] = ssim_metric
+            #     mse = torch.mean((x['driving'] - generated['prediction']) ** 2)
+            #     if mse == 0:
+            #         psnr_metric = float('inf')
+            #     else:
+            #         psnr_metric = 20 * torch.log10(1.0 / torch.sqrt(mse)).cpu().numpy()
+            #     losses['PSNR'] = psnr_metric
+            # ---------
+            # metric and log
+            # ---------
+            temp = {}
+            for loss in losses_list:
+                for key, value in loss.items():
+                    if key not in temp:
+                        temp[key] = 0
+                    temp[key] += value
+            for key, value in temp.items():
+                temp[key] /= len(losses_list)
+                losses[key] = temp[key]
+
             with torch.no_grad():
                 l1_metric = torch.abs(x['driving'] - generated['prediction']).mean().cpu().numpy()
                 losses['L1'] = l1_metric
@@ -181,6 +215,7 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
                 else:
                     psnr_metric = 20 * torch.log10(1.0 / torch.sqrt(mse)).cpu().numpy()
                 losses['PSNR'] = psnr_metric
+
 
             wandb.log(losses)
             del x

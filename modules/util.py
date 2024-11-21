@@ -394,7 +394,7 @@ class Comb_DownBlock2d(nn.Module):
         out = F.relu(out)
         out = self.pool(out)
         return out
-    
+
 
 class Comb_Encoder(nn.Module):
     def __init__(self, block_expansion, in_features, num_blocks=3, max_features=256):
@@ -418,11 +418,13 @@ class Comb_UpBlock2d(nn.Module):
     def __init__(self, in_features, out_features, kernel_size=3):
         super(Comb_UpBlock2d, self).__init__()
         self.conv = SMPLConv2d(in_features, out_features, kernel_size=kernel_size)
+        # self.conv = nn.Conv2d(in_channels=in_features, out_channels=out_features, kernel_size=kernel_size, padding=1)
         self.norm = BatchNorm2d(out_features, affine=True)
 
     def forward(self, x, smpl):
         out = F.interpolate(x, scale_factor=2)
         out = self.conv(out, smpl)
+        # out = self.conv(out)
         out = self.norm(out)
         out = F.relu(out)
         return out

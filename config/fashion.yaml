@@ -23,8 +23,9 @@ model_params:
     num_down_blocks: 3
     num_bottleneck_blocks: 2
     skips: True
-    # mode: 'style_concat'
-    mode: 'conv_concat'
+    blend: False
+    flow: True
+    mode: 'concat' # ['concat', 'style', 'att']
     pixelwise_flow_predictor_params:
       block_expansion: 64
       max_features: 256
@@ -32,6 +33,7 @@ model_params:
       scale_factor: 0.25
       use_deformed_source: True
       use_covar_heatmap: True
+      srm: True
   bg_predictor_params:
     block_expansion: 64
     max_features: 256
@@ -52,7 +54,7 @@ train_params:
   num_repeats: 30
   epoch_milestones: [70, 90]
   lr_generator: 2.0e-4
-  batch_size: 8
+  batch_size: 16
   scales: [1, 0.5, 0.25, 0.125]
   # scales: [1]
   dataloader_workers: 4

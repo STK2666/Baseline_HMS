@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from modules.util import ResBlock2d, SameBlock2d, UpBlock2d, StyledUpBlock2d, StyledSameBlock2d
 from modules.pixelwise_flow_predictor import PixelwiseFlowPredictor
 from modules.backbones import Encoder
+from modules.pretrained import PartialResNet50
 
 
 def dot_product_attention(q, k, v):
@@ -54,8 +55,17 @@ class Generator(nn.Module):
         # encoder
         if self.flow:
             # self.encoder = Encoder(in_channels=num_channels+33, block_expansion=block_expansion, max_features=max_features,
-            self.encoder = Encoder(in_channels=num_channels+24, block_expansion=block_expansion, max_features=max_features,
-                                 num_down_blocks=num_down_blocks, skips=skips)
+            # self.encoder = Encoder(in_channels=num_channels+24, block_expansion=block_expansion, max_features=max_features,
+            #                      num_down_blocks=num_down_blocks, skips=skips)
+            self.encoder = nn.Sequential(
+                nn.Conv2d(num_channels+24, 3, kernel_size=(7, 7), padding=(3, 3)),
+                PartialResNet50(),
+                # nn.Conv2d(512, block_expansion, kernel_size=(3, 3), padding=(1, 1)),
+                nn.ReLU(),
+                nn.Conv2d(512, max_features, kernel_size=(3, 3), padding=(1, 1)),
+            )
+            self.frozen_resnet()
+            
         elif self.mode == 'concat':
             self.encoder = Encoder(in_channels=26, block_expansion=block_expansion, max_features=max_features,
                                  num_down_blocks=num_down_blocks, skips=skips)
@@ -119,6 +129,9 @@ class Generator(nn.Module):
             optical_flow = optical_flow.permute(0, 2, 3, 1)
         return F.grid_sample(inp, optical_flow)
 
+    def frozen_resnet(self):
+        for param in self.encoder[1].parameters():
+            param.requires_grad = False
 
     def forward(self, source_image, driving_region_params, source_region_params, driving_smpl, source_smpl, bg_params=None, source_smpl_rdr=None, driving_smpl_rdr=None, source_depth=None, driving_depth=None):
         output_dict = {}
@@ -146,7 +159,8 @@ class Generator(nn.Module):
 
         # encode
         skips = self.encoder(inputs)
-        out = skips[-1]
+        # out = skips[-1]
+        out = skips
         if self.mode == 'att':
             app = self.appearance_encoder(source_image)
         elif self.mode == 'style':
@@ -158,9 +172,9 @@ class Generator(nn.Module):
         output_dict["bottle_neck_feat"] = out
 
         # decode
-        for i in range(len(self.encoder.blocks)):
-            if self.skips:
-                out = out + skips[-(i + 1)]
+        for i in range(int(len(self.up_blocks)/2)):
+            # if self.skips:
+                # out = out + skips[-(i + 1)]
 
             if self.mode == 'att':
                 q = self.q_blocks[i](out)
@@ -175,8 +189,8 @@ class Generator(nn.Module):
                 out = self.up_blocks[i*2](out)
                 out = self.up_blocks[i*2+1](out)
 
-        if self.skips:
-            out = out + skips[0]
+        # if self.skips:
+            # out = out + skips[0]
 
         # to rgb
         out = torch.sigmoid(self.final(out))

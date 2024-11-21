@@ -107,6 +107,7 @@ def train(config, inpainting_network, bg_predictor, dense_motion_network, checkp
                 # ---------
                 requires_grad(dense_motion_network, True)
                 requires_grad(inpainting_network, True)
+                # inpainting_network.frozen_resnet()
                 if bg_predictor and epoch>=bg_start:
                     requires_grad(bg_predictor, True)
                 if discriminator:

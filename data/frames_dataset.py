@@ -137,10 +137,13 @@ class FramesDataset(Dataset):
         video_name = os.path.basename(path)
         video_path = os.path.join(path, 'frames')
         json_path = os.path.join(path, 'kptsmpls')
-        # rendered_path = os.path.join(path, 'rendered')
+
+        rendered_path = os.path.join(path, 'rendered')
         # rendered_path = os.path.join(path, 'new_normal')
         # rendered_path = os.path.join(path, 'new_normal_notmp').replace('/ssd5/tongkai/FashionVideo', '/ssd5/tongkai/dataset/FashionVideo')
-        rendered_path = os.path.join(path, 'normal')
+
+        # rendered_path = os.path.join(path, 'normal')
+
         # depth_path = os.path.join(path, 'new_depth')
         # depth_path = os.path.join(path, 'new_depth_notmp').replace('/ssd5/tongkai/FashionVideo', '/ssd5/tongkai/dataset/FashionVideo')
         depth_path = os.path.join(path, 'depth')

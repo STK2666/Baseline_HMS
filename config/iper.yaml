@@ -13,6 +13,7 @@ model_params:
   common_params:
     num_regions: 10
     num_channels: 3
+    region_channels: 4
     estimate_affine: True
     revert_axis_swap: True
     bg: True
@@ -22,8 +23,9 @@ model_params:
     num_down_blocks: 3
     num_bottleneck_blocks: 2
     skips: True
-    # mode: 'style_concat'
-    mode: 'conv_concat'
+    blend: False
+    flow: True
+    mode: 'concat' # ['concat', 'style', 'att']
     pixelwise_flow_predictor_params:
       block_expansion: 64
       max_features: 256
@@ -31,18 +33,19 @@ model_params:
       scale_factor: 0.25
       use_deformed_source: True
       use_covar_heatmap: True
+      srm: True
   bg_predictor_params:
-    block_expansion: 32
+    block_expansion: 64
     max_features: 256
     num_blocks: 3
     bg_type: 'affine'
   region_predictor_params:
     temperature: 0.1
-    block_expansion: 32
+    block_expansion: 64
     max_features: 256
     scale_factor: 0.25
     num_blocks: 3
-    pca_based: True
+    pca_based: False
     pad: 0
     fast_svd: False
 
@@ -51,10 +54,11 @@ train_params:
   num_repeats: 30
   epoch_milestones: [70, 90]
   lr_generator: 2.0e-4
-  batch_size: 8
-  scales: [1]
-  dataloader_workers: 10
-  checkpoint_freq: 100
+  batch_size: 16
+  scales: [1, 0.5, 0.25, 0.125]
+  # scales: [1]
+  dataloader_workers: 4
+  checkpoint_freq: 10
   bg_start: 0
   transform_params:
     sigma_affine: 0.05
@@ -62,11 +66,13 @@ train_params:
     points_tps: 5
   loss_weights:
     perceptual: [10, 10, 10, 10, 10]
+    # style: [0, 0, 0, 0, 0]
     style: [0.1, 0.1, 0.1, 0.1, 0.1]
     l1: 50
-    adv: 5
-    face_gan: 5
-    face_l1: 5
+    adv: 20
+    # face_gan: 5
+    # face_l1: 5
+    warp: 0
     equivariance_shift: 0
     equivariance_affine: 0
 
